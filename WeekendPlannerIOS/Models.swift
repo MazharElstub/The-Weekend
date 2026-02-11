@@ -458,6 +458,21 @@ struct CalendarHelper {
         return "\(monthFormatter.string(from: saturday)) \(dayFormatter.string(from: saturday)) - \(monthFormatter.string(from: sunday)) \(dayFormatter.string(from: sunday))"
     }
 
+    static func isWeekendInPast(_ saturday: Date, referenceDate: Date = Date()) -> Bool {
+        let sunday = calendar.date(byAdding: .day, value: 1, to: saturday) ?? saturday
+        let sundayStart = calendar.startOfDay(for: sunday)
+        let todayStart = calendar.startOfDay(for: referenceDate)
+        return sundayStart < todayStart
+    }
+
+    static func remainingWeekends(in weekends: [WeekendInfo], referenceDate: Date = Date()) -> [WeekendInfo] {
+        weekends.filter { !isWeekendInPast($0.saturday, referenceDate: referenceDate) }
+    }
+
+    static func hasRemainingWeekends(_ month: MonthOption, referenceDate: Date = Date()) -> Bool {
+        month.weekends.contains { !isWeekendInPast($0.saturday, referenceDate: referenceDate) }
+    }
+
     static func timeString(from date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
