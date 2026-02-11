@@ -22,6 +22,10 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>The Weekend uses Calendar access to warn about conflicts and optionally add your plans to Apple Calendar.</string>
+    <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+    <string>The Weekend can add your saved plans to Apple Calendar when you enable export.</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

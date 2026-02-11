@@ -24,11 +24,14 @@ final class WeekendPlannerIOSUITests: XCTestCase {
 
     @MainActor
     func testExample() throws {
-        // UI tests must launch the application that they test.
         let app = XCUIApplication()
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
+        let tabBar = app.tabBars.firstMatch
+        XCTAssertTrue(tabBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(tabBar.buttons["Overview"].exists)
+        XCTAssertTrue(tabBar.buttons["Weekend View"].exists)
+        XCTAssertTrue(tabBar.buttons["Settings"].exists)
     }
 
     @MainActor
