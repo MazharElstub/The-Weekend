@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific data
+xcuserdata/
+*.xcuserdatad
+*.xcuserstate
+
+# Build products and local build caches
+.DerivedData*/
+DerivedData/
+build/
+.build/
+*.moved-aside
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager local state
+.swiftpm/
+
+# Dependency manager build artifacts
+Pods/
+Carthage/Build/
+
+# Fastlane outputs
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+# Local environment files
+.env
+.env.*
+
+# Tool-specific local state
+.netlify/
