@@ -232,7 +232,7 @@ struct OverviewView: View {
     }
 
     private var yearSections: [OverviewYearSection] {
-        let months = CalendarHelper.getMonths()
+        let months = CalendarHelper.getMonths().filter { CalendarHelper.hasRemainingWeekends($0) }
         var sections: [OverviewYearSection] = []
 
         for month in months {
@@ -257,8 +257,9 @@ struct OverviewView: View {
                 ForEach(option.weekends) { weekend in
                     let key = CalendarHelper.formatKey(weekend.saturday)
                     let status = state.status(for: key)
+                    let isPastWeekend = CalendarHelper.isWeekendInPast(weekend.saturday)
                     Button(action: { onSelectWeekend(key) }) {
-                        statusDot(for: status.type)
+                        statusDot(for: status.type, isPastWeekend: isPastWeekend)
                     }
                 }
             }
@@ -286,8 +287,12 @@ struct OverviewView: View {
     }
 
     @ViewBuilder
-    private func statusDot(for type: String) -> some View {
-        if type == "protected" {
+    private func statusDot(for type: String, isPastWeekend: Bool) -> some View {
+        if isPastWeekend {
+            Circle()
+                .fill(Color.secondary.opacity(0.35))
+                .frame(width: 12, height: 12)
+        } else if type == "protected" {
             ProtectedStripeDot(size: 12)
         } else {
             Circle()
@@ -394,6 +399,7 @@ struct MonthDisplayView: View {
     var body: some View {
         let options = CalendarHelper.getMonthOptions()
         let option = options.first { $0.key == selectedKey } ?? options[0]
+        let visibleWeekends = CalendarHelper.remainingWeekends(in: option.weekends)
 
         CardContainer {
             VStack(alignment: .leading, spacing: 16) {
@@ -406,13 +412,13 @@ struct MonthDisplayView: View {
                         .foregroundColor(.secondary)
                 }
 
-                if option.weekends.isEmpty {
+                if visibleWeekends.isEmpty {
                     Text("No weekends left")
                         .font(.callout)
                         .foregroundColor(.secondary)
                 } else {
                     VStack(spacing: 36) {
-                        ForEach(option.weekends) { weekend in
+                        ForEach(visibleWeekends) { weekend in
                             let key = CalendarHelper.formatKey(weekend.saturday)
                             WeekendRowView(
                                 weekend: weekend,
