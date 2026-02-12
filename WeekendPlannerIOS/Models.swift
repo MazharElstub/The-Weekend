@@ -49,6 +49,7 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
     var id: String
     var title: String
     var type: String
+    var calendarId: String?
     var weekendKey: String
     var days: [String]
     var startTime: String
@@ -67,6 +68,7 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
         case id
         case title
         case type
+        case calendarId = "calendar_id"
         case weekendKey = "weekend_key"
         case days
         case startTime = "start_time"
@@ -86,6 +88,7 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
         id: String,
         title: String,
         type: String,
+        calendarId: String? = nil,
         weekendKey: String,
         days: [String],
         startTime: String,
@@ -103,6 +106,7 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
         self.id = id
         self.title = title
         self.type = type
+        self.calendarId = calendarId
         self.weekendKey = weekendKey
         self.days = days
         self.startTime = startTime
@@ -123,6 +127,7 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
         id = try container.decode(String.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         type = try container.decode(String.self, forKey: .type)
+        calendarId = try container.decodeIfPresent(String.self, forKey: .calendarId)
         weekendKey = try container.decode(String.self, forKey: .weekendKey)
         days = try container.decodeIfPresent([String].self, forKey: .days) ?? []
         startTime = try container.decode(String.self, forKey: .startTime)
@@ -143,6 +148,7 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
         try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(calendarId, forKey: .calendarId)
         try container.encode(weekendKey, forKey: .weekendKey)
         try container.encode(days, forKey: .days)
         try container.encode(startTime, forKey: .startTime)
@@ -183,6 +189,7 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
             id: id,
             title: title,
             type: type,
+            calendarId: calendarId,
             weekendKey: weekendKey,
             days: days,
             startTime: startTime,
@@ -222,20 +229,24 @@ struct WeekendEvent: Identifiable, Codable, Hashable {
 struct WeekendProtection: Codable {
     let weekendKey: String
     let userId: String
+    let calendarId: String?
 
     enum CodingKeys: String, CodingKey {
         case weekendKey = "weekend_key"
         case userId = "user_id"
+        case calendarId = "calendar_id"
     }
 }
 
 struct NewWeekendProtection: Encodable {
     let weekendKey: String
     let userId: String
+    let calendarId: String?
 
     enum CodingKeys: String, CodingKey {
         case weekendKey = "weekend_key"
         case userId = "user_id"
+        case calendarId = "calendar_id"
     }
 }
 
@@ -243,6 +254,7 @@ struct NewWeekendEvent: Encodable {
     let id: String?
     let title: String
     let type: String
+    let calendarId: String?
     let weekendKey: String
     let days: [String]
     let startTime: String
@@ -253,6 +265,7 @@ struct NewWeekendEvent: Encodable {
         case id
         case title
         case type
+        case calendarId = "calendar_id"
         case weekendKey = "weekend_key"
         case days
         case startTime = "start_time"
@@ -264,6 +277,7 @@ struct NewWeekendEvent: Encodable {
         id: String? = nil,
         title: String,
         type: String,
+        calendarId: String? = nil,
         weekendKey: String,
         days: [String],
         startTime: String,
@@ -273,6 +287,7 @@ struct NewWeekendEvent: Encodable {
         self.id = id
         self.title = title
         self.type = type
+        self.calendarId = calendarId
         self.weekendKey = weekendKey
         self.days = days
         self.startTime = startTime
@@ -285,6 +300,7 @@ struct NewWeekendEvent: Encodable {
         try container.encodeIfPresent(id, forKey: .id)
         try container.encode(title, forKey: .title)
         try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(calendarId, forKey: .calendarId)
         try container.encode(weekendKey, forKey: .weekendKey)
         try container.encode(days, forKey: .days)
         try container.encode(startTime, forKey: .startTime)
@@ -296,6 +312,7 @@ struct NewWeekendEvent: Encodable {
 struct UpdateWeekendEvent: Encodable {
     let title: String
     let type: String
+    let calendarId: String?
     let weekendKey: String
     let days: [String]
     let startTime: String
@@ -304,10 +321,29 @@ struct UpdateWeekendEvent: Encodable {
     enum CodingKeys: String, CodingKey {
         case title
         case type
+        case calendarId = "calendar_id"
         case weekendKey = "weekend_key"
         case days
         case startTime = "start_time"
         case endTime = "end_time"
+    }
+
+    init(
+        title: String,
+        type: String,
+        calendarId: String? = nil,
+        weekendKey: String,
+        days: [String],
+        startTime: String,
+        endTime: String
+    ) {
+        self.title = title
+        self.type = type
+        self.calendarId = calendarId
+        self.weekendKey = weekendKey
+        self.days = days
+        self.startTime = startTime
+        self.endTime = endTime
     }
 }
 
@@ -325,6 +361,114 @@ struct WeekendInfo: Identifiable, Hashable {
     let id = UUID()
     let saturday: Date
     let label: String
+}
+
+struct PlannerCalendar: Identifiable, Codable, Hashable {
+    let id: String
+    let name: String
+    let ownerUserId: String
+    let shareCode: String
+    let maxMembers: Int
+    var memberCount: Int
+    let createdAt: Date
+    let updatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case ownerUserId = "owner_user_id"
+        case shareCode = "share_code"
+        case maxMembers = "max_members"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case memberCount
+    }
+
+    init(
+        id: String,
+        name: String,
+        ownerUserId: String,
+        shareCode: String,
+        maxMembers: Int,
+        memberCount: Int,
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.id = id
+        self.name = name
+        self.ownerUserId = ownerUserId
+        self.shareCode = shareCode
+        self.maxMembers = maxMembers
+        self.memberCount = memberCount
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        ownerUserId = try container.decode(String.self, forKey: .ownerUserId)
+        shareCode = try container.decode(String.self, forKey: .shareCode)
+        maxMembers = try container.decodeIfPresent(Int.self, forKey: .maxMembers) ?? 5
+        memberCount = try container.decodeIfPresent(Int.self, forKey: .memberCount) ?? 1
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+}
+
+struct CalendarMembership: Codable {
+    let id: String
+    let calendarId: String
+    let userId: String
+    let role: String
+    let createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case calendarId = "calendar_id"
+        case userId = "user_id"
+        case role
+        case createdAt = "created_at"
+    }
+}
+
+struct NewPlannerCalendar: Encodable {
+    let name: String
+    let ownerUserId: String
+    let shareCode: String
+    let maxMembers: Int
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case ownerUserId = "owner_user_id"
+        case shareCode = "share_code"
+        case maxMembers = "max_members"
+    }
+}
+
+struct UpdatePlannerCalendarName: Encodable {
+    let name: String
+}
+
+struct NewCalendarMembership: Encodable {
+    let calendarId: String
+    let userId: String
+    let role: String
+
+    enum CodingKeys: String, CodingKey {
+        case calendarId = "calendar_id"
+        case userId = "user_id"
+        case role
+    }
+}
+
+private struct CalendarMembershipCountRow: Decodable {
+    let calendarId: String
+
+    enum CodingKeys: String, CodingKey {
+        case calendarId = "calendar_id"
+    }
 }
 
 enum NotificationPermissionState: String {
@@ -686,6 +830,8 @@ final class AppState: ObservableObject {
     @Published var showAuthSplash = true
     @Published var useDarkMode = false
     @Published var protectionMode: ProtectionMode = .warn
+    @Published var calendars: [PlannerCalendar] = []
+    @Published var selectedCalendarId: String?
     @Published var notificationPermissionState: NotificationPermissionState = .notDetermined
     @Published var notificationPreferences: NotificationPreferences = .defaults
     @Published var calendarPermissionState: CalendarPermissionState = .notDetermined
@@ -714,6 +860,8 @@ final class AppState: ObservableObject {
     private var periodicSyncTask: Task<Void, Never>?
 
     private enum CacheFile {
+        static let calendars = "calendars_cache.json"
+        static let selectedCalendarId = "selected_calendar_cache.json"
         static let events = "events_cache.json"
         static let protections = "protections_cache.json"
         static let templates = "templates_cache.json"
@@ -750,6 +898,8 @@ final class AppState: ObservableObject {
         self.goalService = goalService
         self.useDarkMode = UserDefaults.standard.bool(forKey: "weekend-theme-dark")
         self.notificationPreferences = NotificationPreferences.load()
+        self.calendars = localCacheStore.load([PlannerCalendar].self, fileName: CacheFile.calendars, fallback: [])
+        self.selectedCalendarId = localCacheStore.load(String?.self, fileName: CacheFile.selectedCalendarId, fallback: nil)
         self.events = localCacheStore.load([WeekendEvent].self, fileName: CacheFile.events, fallback: [])
         self.protections = Set(localCacheStore.load([String].self, fileName: CacheFile.protections, fallback: []))
         self.planTemplates = localCacheStore.load([PlanTemplate].self, fileName: CacheFile.templates, fallback: templateStore.load())
@@ -835,6 +985,8 @@ final class AppState: ObservableObject {
         }
         session = nil
         showAuthSplash = true
+        calendars = []
+        selectedCalendarId = nil
         events = []
         protections = []
         monthlyGoals = []
@@ -843,6 +995,8 @@ final class AppState: ObservableObject {
         auditEntries = []
         pendingWeekendSelection = nil
         pendingAddPlanWeekendKey = nil
+        localCacheStore.remove(fileName: CacheFile.calendars)
+        localCacheStore.remove(fileName: CacheFile.selectedCalendarId)
         localCacheStore.remove(fileName: CacheFile.events)
         localCacheStore.remove(fileName: CacheFile.protections)
         localCacheStore.remove(fileName: CacheFile.syncQueue)
@@ -888,20 +1042,280 @@ final class AppState: ObservableObject {
     }
 
     func loadAll() async {
+        await loadCalendars()
         await loadEvents()
         await loadProtections()
         await loadMonthlyGoals()
         await flushPendingOperations()
     }
 
-    func loadEvents() async {
-        guard let session = session else { return }
+    func switchCalendar(to calendarId: String) async {
+        guard selectedCalendarId != calendarId else { return }
+        selectedCalendarId = calendarId
+        persistCaches()
+        await loadEvents()
+        await loadProtections()
+        await rescheduleNotifications()
+    }
+
+    func createCalendar(name: String) async -> Bool {
+        guard let session else { return false }
         let userId = normalizedUserId(for: session)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let payload = NewPlannerCalendar(
+            name: trimmed,
+            ownerUserId: userId,
+            shareCode: generateShareCode(),
+            maxMembers: 5
+        )
+
+        do {
+            let created: [PlannerCalendar] = try await supabase
+                .from("planner_calendars")
+                .insert(payload)
+                .select("id,name,owner_user_id,share_code,max_members,created_at,updated_at")
+                .execute()
+                .value
+            guard let calendar = created.first else { return false }
+            let membership = NewCalendarMembership(
+                calendarId: calendar.id,
+                userId: userId,
+                role: "owner"
+            )
+            _ = try await supabase
+                .from("calendar_members")
+                .insert(membership)
+                .execute()
+            await loadCalendars()
+            if calendars.contains(where: { $0.id == calendar.id }) {
+                await switchCalendar(to: calendar.id)
+            }
+            return true
+        } catch {
+            authMessage = "Could not create calendar. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func renameCalendar(calendarId: String, to newName: String) async -> Bool {
+        guard session != nil else { return false }
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            authMessage = "Calendar name cannot be empty."
+            return false
+        }
+
+        if let existing = calendars.first(where: { $0.id == calendarId }),
+           existing.name == trimmed {
+            return true
+        }
+
+        let payload = UpdatePlannerCalendarName(name: trimmed)
+        do {
+            let updated: [PlannerCalendar] = try await supabase
+                .from("planner_calendars")
+                .update(payload)
+                .eq("id", value: calendarId)
+                .select("id,name,owner_user_id,share_code,max_members,created_at,updated_at")
+                .limit(1)
+                .execute()
+                .value
+
+            guard !updated.isEmpty else {
+                authMessage = "Only the calendar owner can rename this calendar."
+                return false
+            }
+
+            await loadCalendars()
+            return true
+        } catch {
+            authMessage = "Could not rename calendar. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func joinCalendar(shareCode: String) async -> Bool {
+        guard let session else { return false }
+        let userId = normalizedUserId(for: session)
+        let normalizedCode = shareCode
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        guard !normalizedCode.isEmpty else { return false }
+
+        do {
+            let calendarsByCode: [PlannerCalendar] = try await supabase
+                .from("planner_calendars")
+                .select("id,name,owner_user_id,share_code,max_members,created_at,updated_at")
+                .eq("share_code", value: normalizedCode)
+                .limit(1)
+                .execute()
+                .value
+            guard let target = calendarsByCode.first else {
+                authMessage = "No calendar found for code \(normalizedCode)."
+                return false
+            }
+
+            let existingMemberships: [CalendarMembership] = try await supabase
+                .from("calendar_members")
+                .select("id,calendar_id,user_id,role,created_at")
+                .eq("calendar_id", value: target.id)
+                .execute()
+                .value
+
+            if existingMemberships.contains(where: { $0.userId == userId }) {
+                await loadCalendars()
+                await switchCalendar(to: target.id)
+                return true
+            }
+
+            guard existingMemberships.count < target.maxMembers else {
+                authMessage = "This calendar is full. A maximum of \(target.maxMembers) members is allowed."
+                return false
+            }
+
+            let membership = NewCalendarMembership(
+                calendarId: target.id,
+                userId: userId,
+                role: "member"
+            )
+            _ = try await supabase
+                .from("calendar_members")
+                .insert(membership)
+                .execute()
+
+            await loadCalendars()
+            await switchCalendar(to: target.id)
+            return true
+        } catch {
+            authMessage = "Could not join calendar. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private func loadCalendars() async {
+        guard let session else { return }
+        let userId = normalizedUserId(for: session)
+        do {
+            var memberships = try await fetchMemberships(userId: userId)
+            if memberships.isEmpty {
+                try await ensurePersonalCalendar(userId: userId)
+                memberships = try await fetchMemberships(userId: userId)
+            }
+
+            let calendarIDs = Array(Set(memberships.map(\.calendarId)))
+            guard !calendarIDs.isEmpty else {
+                calendars = []
+                selectedCalendarId = nil
+                persistCaches()
+                return
+            }
+
+            let fetchedCalendars: [PlannerCalendar] = try await supabase
+                .from("planner_calendars")
+                .select("id,name,owner_user_id,share_code,max_members,created_at,updated_at")
+                .`in`("id", values: calendarIDs)
+                .order("created_at", ascending: true)
+                .execute()
+                .value
+
+            let memberCounts = await fetchMemberCounts(calendarIDs: calendarIDs)
+            calendars = fetchedCalendars
+                .map { calendar in
+                    var mutable = calendar
+                    mutable.memberCount = memberCounts[calendar.id] ?? 1
+                    return mutable
+                }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+            if let selectedCalendarId,
+               calendars.contains(where: { $0.id == selectedCalendarId }) {
+                // keep current selection
+            } else {
+                selectedCalendarId = calendars.first?.id
+            }
+            persistCaches()
+        } catch {
+            authMessage = "Could not load calendars. \(error.localizedDescription)"
+        }
+    }
+
+    private func fetchMemberships(userId: String) async throws -> [CalendarMembership] {
+        try await supabase
+            .from("calendar_members")
+            .select("id,calendar_id,user_id,role,created_at")
+            .eq("user_id", value: userId)
+            .execute()
+            .value
+    }
+
+    private func ensurePersonalCalendar(userId: String) async throws {
+        let payload = NewPlannerCalendar(
+            name: "Personal",
+            ownerUserId: userId,
+            shareCode: generateShareCode(),
+            maxMembers: 5
+        )
+        let created: [PlannerCalendar] = try await supabase
+            .from("planner_calendars")
+            .insert(payload)
+            .select("id,name,owner_user_id,share_code,max_members,created_at,updated_at")
+            .execute()
+            .value
+
+        guard let calendar = created.first else { return }
+        let membership = NewCalendarMembership(
+            calendarId: calendar.id,
+            userId: userId,
+            role: "owner"
+        )
+        _ = try await supabase
+            .from("calendar_members")
+            .insert(membership)
+            .execute()
+    }
+
+    private func fetchMemberCounts(calendarIDs: [String]) async -> [String: Int] {
+        guard !calendarIDs.isEmpty else { return [:] }
+        do {
+            let rows: [CalendarMembershipCountRow] = try await supabase
+                .from("calendar_members")
+                .select("calendar_id")
+                .`in`("calendar_id", values: calendarIDs)
+                .execute()
+                .value
+            return rows.reduce(into: [:]) { partialResult, row in
+                partialResult[row.calendarId, default: 0] += 1
+            }
+        } catch {
+            return [:]
+        }
+    }
+
+    private func generateShareCode() -> String {
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        var result = ""
+        for _ in 0..<8 {
+            if let character = alphabet.randomElement() {
+                result.append(character)
+            }
+        }
+        return result
+    }
+
+    func loadEvents() async {
+        guard session != nil else { return }
+        guard let selectedCalendarId else {
+            events = []
+            persistCaches()
+            return
+        }
         do {
             let response: [WeekendEvent] = try await supabase
                 .from("weekend_events")
                 .select()
-                .eq("user_id", value: userId)
+                .eq("calendar_id", value: selectedCalendarId)
                 .order("weekend_key", ascending: true)
                 .execute()
                 .value
@@ -918,13 +1332,17 @@ final class AppState: ObservableObject {
     }
 
     func loadProtections() async {
-        guard let session = session else { return }
-        let userId = normalizedUserId(for: session)
+        guard session != nil else { return }
+        guard let selectedCalendarId else {
+            protections = []
+            persistCaches()
+            return
+        }
         do {
             let response: [WeekendProtection] = try await supabase
                 .from("weekend_protections")
-                .select("weekend_key,user_id")
-                .eq("user_id", value: userId)
+                .select("weekend_key,user_id,calendar_id")
+                .eq("calendar_id", value: selectedCalendarId)
                 .order("weekend_key", ascending: true)
                 .execute()
                 .value
@@ -954,12 +1372,17 @@ final class AppState: ObservableObject {
 
     func addEvent(_ draft: NewWeekendEvent, exportToCalendar: Bool = false) async -> Bool {
         guard let session else { return false }
+        guard let selectedCalendarId else {
+            authMessage = "Please select a calendar first."
+            return false
+        }
         let userId = normalizedUserId(for: session)
         let now = Date()
         let newEvent = WeekendEvent(
             id: draft.id ?? UUID().uuidString,
             title: draft.title,
             type: draft.type,
+            calendarId: draft.calendarId ?? selectedCalendarId,
             weekendKey: draft.weekendKey,
             days: draft.days.sorted(),
             startTime: draft.startTime,
@@ -994,7 +1417,8 @@ final class AppState: ObservableObject {
             PendingSyncOperation(
                 type: .upsertEvent,
                 entityId: newEvent.id,
-                event: newEvent
+                event: newEvent,
+                calendarId: newEvent.calendarId
             )
         )
         persistCaches()
@@ -1005,10 +1429,15 @@ final class AppState: ObservableObject {
 
     func updateEvent(eventId: String, _ update: UpdateWeekendEvent, exportToCalendar: Bool) async -> Bool {
         guard let index = events.firstIndex(where: { $0.id == eventId }) else { return false }
+        guard let selectedCalendarId else {
+            authMessage = "Please select a calendar first."
+            return false
+        }
         var updatedEvent = events[index]
         let now = Date()
         updatedEvent.title = update.title
         updatedEvent.type = update.type
+        updatedEvent.calendarId = update.calendarId ?? selectedCalendarId
         updatedEvent.weekendKey = update.weekendKey
         updatedEvent.days = update.days.sorted()
         updatedEvent.startTime = update.startTime
@@ -1037,7 +1466,8 @@ final class AppState: ObservableObject {
             PendingSyncOperation(
                 type: .upsertEvent,
                 entityId: updatedEvent.id,
-                event: updatedEvent
+                event: updatedEvent,
+                calendarId: updatedEvent.calendarId
             )
         )
         persistCaches()
@@ -1053,6 +1483,7 @@ final class AppState: ObservableObject {
         let payload = UpdateWeekendEvent(
             title: event.title,
             type: event.type,
+            calendarId: event.calendarId ?? selectedCalendarId,
             weekendKey: toWeekendKey,
             days: updatedDays.map(\.rawValue),
             startTime: event.startTime,
@@ -1074,6 +1505,7 @@ final class AppState: ObservableObject {
             id: UUID().uuidString,
             title: event.title,
             type: event.type,
+            calendarId: event.calendarId ?? selectedCalendarId,
             weekendKey: toWeekendKey,
             days: duplicateDays.map(\.rawValue),
             startTime: event.startTime,
@@ -1096,7 +1528,8 @@ final class AppState: ObservableObject {
         enqueueOperation(
             PendingSyncOperation(
                 type: .deleteEvent,
-                entityId: event.id
+                entityId: event.id,
+                calendarId: event.calendarId ?? selectedCalendarId
             )
         )
         persistCaches()
@@ -1105,6 +1538,10 @@ final class AppState: ObservableObject {
     }
 
     func toggleProtection(weekendKey: String, removePlans: Bool) async {
+        guard let selectedCalendarId else {
+            authMessage = "Please select a calendar first."
+            return
+        }
         if protections.contains(weekendKey) {
             protections.remove(weekendKey)
             recordAudit(
@@ -1117,6 +1554,7 @@ final class AppState: ObservableObject {
                 PendingSyncOperation(
                     type: .setProtection,
                     entityId: weekendKey,
+                    calendarId: selectedCalendarId,
                     protectionWeekKey: weekendKey,
                     protectionEnabled: false
                 )
@@ -1135,7 +1573,8 @@ final class AppState: ObservableObject {
                 enqueueOperation(
                     PendingSyncOperation(
                         type: .deleteEvent,
-                        entityId: event.id
+                        entityId: event.id,
+                        calendarId: event.calendarId ?? selectedCalendarId
                     )
                 )
             }
@@ -1155,6 +1594,7 @@ final class AppState: ObservableObject {
             PendingSyncOperation(
                 type: .setProtection,
                 entityId: weekendKey,
+                calendarId: selectedCalendarId,
                 protectionWeekKey: weekendKey,
                 protectionEnabled: true
             )
@@ -1849,6 +2289,8 @@ final class AppState: ObservableObject {
     }
 
     private func persistCaches() {
+        localCacheStore.save(calendars, fileName: CacheFile.calendars)
+        localCacheStore.save(selectedCalendarId, fileName: CacheFile.selectedCalendarId)
         localCacheStore.save(events, fileName: CacheFile.events)
         localCacheStore.save(Array(protections), fileName: CacheFile.protections)
         localCacheStore.save(planTemplates, fileName: CacheFile.templates)
@@ -1862,8 +2304,8 @@ final class AppState: ObservableObject {
 }
 
 enum AppTab: String, CaseIterable {
-    case overview = "Overview"
-    case weekend = "Weekend View"
+    case overview = "Dashboard"
+    case weekend = "Planner"
     case settings = "Settings"
 }
 
@@ -1907,14 +2349,27 @@ struct CalendarHelper {
 
     static func formatKey(_ date: Date) -> String {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
 
     static func parseKey(_ key: String) -> Date? {
+        let normalizedInput = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedKey: String
+        if let separator = normalizedInput.firstIndex(of: "T") {
+            normalizedKey = String(normalizedInput[..<separator])
+        } else {
+            normalizedKey = normalizedInput
+        }
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: key)
+        return formatter.date(from: normalizedKey)
     }
 
     static func formatWeekendLabel(_ saturday: Date) -> String {
@@ -1946,22 +2401,42 @@ struct CalendarHelper {
         return formatter.string(from: date)
     }
 
+    static func currentPlanningYear(referenceDate: Date = Date()) -> Int {
+        calendar.component(.year, from: referenceDate)
+    }
+
+    static func planningYears(referenceDate: Date = Date()) -> [Int] {
+        let currentYear = currentPlanningYear(referenceDate: referenceDate)
+        return Array(currentYear...(currentYear + 3))
+    }
+
+    static func planningDateRange(referenceDate: Date = Date()) -> ClosedRange<Date> {
+        let currentYear = currentPlanningYear(referenceDate: referenceDate)
+        let lowerBound = calendar.date(from: DateComponents(year: currentYear, month: 1, day: 1)) ?? referenceDate
+        let upperYear = currentYear + 3
+        let upperDate = calendar.date(from: DateComponents(year: upperYear, month: 12, day: 31)) ?? referenceDate
+        let upperBound = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: upperDate) ?? upperDate
+        return lowerBound...upperBound
+    }
+
     static func getMonths(startingFrom date: Date = Date()) -> [MonthOption] {
         var months: [MonthOption] = []
-        let start = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        let years = planningYears(referenceDate: date)
 
-        for offset in 0..<12 {
-            guard let monthDate = calendar.date(byAdding: .month, value: offset, to: start) else { continue }
-            let weekends = getWeekends(for: monthDate)
-            let option = MonthOption(
-                key: formatKey(monthDate),
-                title: monthYearFormatter.string(from: monthDate),
-                shortLabel: monthFormatter.string(from: monthDate),
-                subtitle: String(calendar.component(.year, from: monthDate)),
-                year: calendar.component(.year, from: monthDate),
-                weekends: weekends
-            )
-            months.append(option)
+        for year in years {
+            for month in 1...12 {
+                guard let monthDate = calendar.date(from: DateComponents(year: year, month: month, day: 1)) else { continue }
+                let weekends = getWeekends(for: monthDate)
+                let option = MonthOption(
+                    key: formatKey(monthDate),
+                    title: monthYearFormatter.string(from: monthDate),
+                    shortLabel: monthFormatter.string(from: monthDate),
+                    subtitle: String(calendar.component(.year, from: monthDate)),
+                    year: calendar.component(.year, from: monthDate),
+                    weekends: weekends
+                )
+                months.append(option)
+            }
         }
 
         return months
@@ -1969,21 +2444,32 @@ struct CalendarHelper {
 
     static func getMonthOptions(startingFrom date: Date = Date()) -> [MonthOption] {
         let months = getMonths(startingFrom: date)
-        guard let current = months.first else { return [] }
-        let next = months.count > 1 ? months[1] : nil
-        let previousRangeStart = calendar.date(byAdding: .month, value: -12, to: date) ?? date
-        let previousSubtitle = "\(monthFormatter.string(from: previousRangeStart)) \(calendar.component(.year, from: previousRangeStart)) – \(monthFormatter.string(from: date)) \(calendar.component(.year, from: date))"
+        guard !months.isEmpty else { return [] }
+
+        let currentMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
+        let currentMonthKey = formatKey(currentMonth)
+        let nextMonth = calendar.date(byAdding: .month, value: 1, to: currentMonth) ?? currentMonth
+        let nextMonthKey = formatKey(nextMonth)
+        let current = months.first(where: { $0.key == currentMonthKey }) ?? months.first
+        let next = months.first(where: { $0.key == nextMonthKey })
+
+        let historicalRangeStart = calendar.date(byAdding: .month, value: -12, to: date) ?? date
+        let historicalSubtitle = "\(monthFormatter.string(from: historicalRangeStart)) \(calendar.component(.year, from: historicalRangeStart)) – \(monthFormatter.string(from: date)) \(calendar.component(.year, from: date))"
 
         let upcomingLabel: String
-        if let next = next {
+        if let current, let next {
             upcomingLabel = "\(monthFormatter.string(from: CalendarHelper.parseKey(current.key) ?? date)) \(current.subtitle) – \(monthFormatter.string(from: CalendarHelper.parseKey(next.key) ?? date)) \(next.subtitle)"
-        } else {
+        } else if let current {
             upcomingLabel = "\(monthFormatter.string(from: CalendarHelper.parseKey(current.key) ?? date)) \(current.subtitle)"
+        } else {
+            upcomingLabel = ""
         }
 
         var upcomingWeekends: [WeekendInfo] = []
-        upcomingWeekends.append(contentsOf: current.weekends)
-        if let next = next {
+        if let current {
+            upcomingWeekends.append(contentsOf: current.weekends)
+        }
+        if let next {
             upcomingWeekends.append(contentsOf: next.weekends)
         }
 
@@ -1997,10 +2483,10 @@ struct CalendarHelper {
                 weekends: upcomingWeekends
             ),
             MonthOption(
-                key: "previous",
-                title: "Previous weekends",
-                shortLabel: "Previous",
-                subtitle: previousSubtitle,
+                key: "historical",
+                title: "Historical weekends",
+                shortLabel: "Historical",
+                subtitle: historicalSubtitle,
                 year: nil,
                 weekends: getPast12MonthWeekends(referenceDate: date)
             )
@@ -2052,7 +2538,7 @@ struct CalendarHelper {
     static func monthSelectionKey(for weekendKey: String, referenceDate: Date = Date()) -> String {
         guard let saturday = parseKey(weekendKey) else { return "upcoming" }
         if isWeekendInPast(saturday, referenceDate: referenceDate) {
-            return "previous"
+            return "historical"
         }
         let normalizedReference = calendar.date(
             from: calendar.dateComponents([.year, .month], from: referenceDate)
@@ -2064,6 +2550,9 @@ struct CalendarHelper {
         if monthDelta == 0 || monthDelta == 1 {
             return "upcoming"
         }
+        let planningYearSet = Set(planningYears(referenceDate: referenceDate))
+        let weekendYear = calendar.component(.year, from: normalizedWeekend)
+        guard planningYearSet.contains(weekendYear) else { return "upcoming" }
         return formatKey(normalizedWeekend)
     }
 

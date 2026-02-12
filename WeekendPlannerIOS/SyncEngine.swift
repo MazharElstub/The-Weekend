@@ -24,6 +24,7 @@ struct PendingSyncOperation: Identifiable, Codable, Hashable {
     var nextAttemptAt: Date
 
     var event: WeekendEvent?
+    var calendarId: String?
     var protectionWeekKey: String?
     var protectionEnabled: Bool?
     var goal: MonthlyGoal?
@@ -37,6 +38,7 @@ struct PendingSyncOperation: Identifiable, Codable, Hashable {
         attemptCount: Int = 0,
         nextAttemptAt: Date = Date(),
         event: WeekendEvent? = nil,
+        calendarId: String? = nil,
         protectionWeekKey: String? = nil,
         protectionEnabled: Bool? = nil,
         goal: MonthlyGoal? = nil,
@@ -49,6 +51,7 @@ struct PendingSyncOperation: Identifiable, Codable, Hashable {
         self.attemptCount = attemptCount
         self.nextAttemptAt = nextAttemptAt
         self.event = event
+        self.calendarId = calendarId
         self.protectionWeekKey = protectionWeekKey
         self.protectionEnabled = protectionEnabled
         self.goal = goal
@@ -120,35 +123,44 @@ final class SyncEngine {
             try await upsertEvent(event: event, userId: userId, supabase: supabase)
 
         case .deleteEvent:
-            try await supabase
+            var deleteQuery = supabase
                 .from("weekend_events")
                 .delete()
                 .eq("id", value: operation.entityId)
-                .eq("user_id", value: userId)
-                .execute()
+            if let calendarId = operation.calendarId {
+                deleteQuery = deleteQuery.eq("calendar_id", value: calendarId)
+            }
+            try await deleteQuery.execute()
 
         case .setProtection:
             guard let weekendKey = operation.protectionWeekKey,
                   let enabled = operation.protectionEnabled else { return }
             if enabled {
-                let payload = NewWeekendProtection(weekendKey: weekendKey, userId: userId)
-                _ = try await supabase
+                guard let calendarId = operation.calendarId else { return }
+                let payload = NewWeekendProtection(
+                    weekendKey: weekendKey,
+                    userId: userId,
+                    calendarId: calendarId
+                )
+                try await supabase
                     .from("weekend_protections")
                     .delete()
                     .eq("weekend_key", value: weekendKey)
-                    .eq("user_id", value: userId)
+                    .eq("calendar_id", value: calendarId)
                     .execute()
                 try await supabase
                     .from("weekend_protections")
                     .insert(payload)
                     .execute()
             } else {
-                try await supabase
+                var removeQuery = supabase
                     .from("weekend_protections")
                     .delete()
                     .eq("weekend_key", value: weekendKey)
-                    .eq("user_id", value: userId)
-                    .execute()
+                if let calendarId = operation.calendarId {
+                    removeQuery = removeQuery.eq("calendar_id", value: calendarId)
+                }
+                try await removeQuery.execute()
             }
 
         case .upsertGoal:
@@ -184,7 +196,6 @@ final class SyncEngine {
             .from("weekend_events")
             .select("id,client_updated_at")
             .eq("id", value: event.id)
-            .eq("user_id", value: userId)
             .limit(1)
             .execute()
             .value
@@ -197,7 +208,7 @@ final class SyncEngine {
         }
 
         if remoteRows.isEmpty {
-            let payload = NewWeekendEventSyncPayload(event: event, userId: userId)
+            let payload = NewWeekendEventSyncPayload(event: event)
             try await supabase
                 .from("weekend_events")
                 .insert(payload)
@@ -208,7 +219,6 @@ final class SyncEngine {
                 .from("weekend_events")
                 .update(payload)
                 .eq("id", value: event.id)
-                .eq("user_id", value: userId)
                 .execute()
         }
     }
@@ -228,6 +238,7 @@ private struct NewWeekendEventSyncPayload: Encodable {
     let id: String
     let title: String
     let type: String
+    let calendarId: String?
     let weekendKey: String
     let days: [String]
     let startTime: String
@@ -245,6 +256,7 @@ private struct NewWeekendEventSyncPayload: Encodable {
         case id
         case title
         case type
+        case calendarId = "calendar_id"
         case weekendKey = "weekend_key"
         case days
         case startTime = "start_time"
@@ -259,15 +271,16 @@ private struct NewWeekendEventSyncPayload: Encodable {
         case deletedAt = "deleted_at"
     }
 
-    init(event: WeekendEvent, userId: String) {
+    init(event: WeekendEvent) {
         id = event.id
         title = event.title
         type = event.type
+        calendarId = event.calendarId
         weekendKey = event.weekendKey
         days = event.days
         startTime = event.startTime
         endTime = event.endTime
-        self.userId = userId
+        userId = event.userId
         status = event.status
         completedAt = SyncDateFormatter.isoString(from: event.completedAt)
         cancelledAt = SyncDateFormatter.isoString(from: event.cancelledAt)
@@ -281,6 +294,7 @@ private struct NewWeekendEventSyncPayload: Encodable {
 private struct UpdateWeekendEventSyncPayload: Encodable {
     let title: String
     let type: String
+    let calendarId: String?
     let weekendKey: String
     let days: [String]
     let startTime: String
@@ -295,6 +309,7 @@ private struct UpdateWeekendEventSyncPayload: Encodable {
     enum CodingKeys: String, CodingKey {
         case title
         case type
+        case calendarId = "calendar_id"
         case weekendKey = "weekend_key"
         case days
         case startTime = "start_time"
@@ -310,6 +325,7 @@ private struct UpdateWeekendEventSyncPayload: Encodable {
     init(event: WeekendEvent) {
         title = event.title
         type = event.type
+        calendarId = event.calendarId
         weekendKey = event.weekendKey
         days = event.days
         startTime = event.startTime
