@@ -1,4 +1,6 @@
 import SwiftUI
+import CoreImage
+import CoreImage.CIFilterBuiltins
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -6,43 +8,47 @@ import UIKit
 struct RootView: View {
     @EnvironmentObject private var state: AppState
     @State private var detailSelection: WeekendSelection?
-    @State private var showAddPlan = false
-    @State private var addPlanWeekendKey: String?
-    @State private var bypassProtectionCheck = false
+    @State private var addPlanPresentation: AddPlanPresentation?
 
     var body: some View {
         ZStack {
             AppGradientBackground()
             TabView(selection: $state.selectedTab) {
-                pageLayout {
-                    OverviewView(
-                        onSelectWeekend: { key in
-                            detailSelection = WeekendSelection(id: key)
-                        },
-                        onSelectMonth: { key in
-                            state.selectedMonthKey = key
-                            state.selectedTab = .weekend
-                        }
-                    )
+                NavigationStack {
+                    pageLayout(showLegend: true) {
+                        OverviewView(
+                            onSelectWeekend: { key in
+                                detailSelection = WeekendSelection(id: key)
+                            },
+                            onSelectMonth: { key in
+                                state.selectedMonthKey = key
+                                state.selectedTab = .weekend
+                            }
+                        )
+                    }
+                    .navigationTitle("Dashboard")
+                    .navigationBarTitleDisplayMode(.inline)
                 }
                 .tag(AppTab.overview)
                 .tabItem {
                     Label(AppTab.overview.rawValue, systemImage: "square.grid.2x2")
                 }
 
-                pageLayout {
-                    WeekendView(onSelectWeekend: { key in
-                        detailSelection = WeekendSelection(id: key)
-                    })
+                NavigationStack {
+                    pageLayout {
+                        WeekendView(onSelectWeekend: { key in
+                            detailSelection = WeekendSelection(id: key)
+                        })
+                    }
+                    .navigationTitle("Planner")
+                    .navigationBarTitleDisplayMode(.inline)
                 }
                 .tag(AppTab.weekend)
                 .tabItem {
                     Label(AppTab.weekend.rawValue, systemImage: "calendar")
                 }
 
-                pageLayout {
-                    SettingsView()
-                }
+                SettingsHomeView()
                 .tag(AppTab.settings)
                 .tabItem {
                     Label(AppTab.settings.rawValue, systemImage: "gearshape")
@@ -62,17 +68,19 @@ struct RootView: View {
             WeekendDetailsView(
                 weekendKey: selection.id,
                 onAddPlans: { key, bypass in
-                    addPlanWeekendKey = key
-                    bypassProtectionCheck = bypass
-                    showAddPlan = true
+                    addPlanPresentation = AddPlanPresentation(
+                        weekendKey: key,
+                        bypassProtection: bypass
+                    )
                 }
             )
         }
-        .sheet(isPresented: $showAddPlan, onDismiss: {
-            bypassProtectionCheck = false
-            addPlanWeekendKey = nil
-        }) {
-            AddPlanView(weekendKey: addPlanWeekendKey, bypassProtection: bypassProtectionCheck)
+        .sheet(item: $addPlanPresentation) { presentation in
+            AddPlanView(
+                weekendKey: presentation.weekendKey,
+                bypassProtection: presentation.bypassProtection
+            )
+            .id(presentation.id)
         }
         .overlay {
             if state.showAuthSplash {
@@ -86,22 +94,27 @@ struct RootView: View {
         }
         .onChange(of: state.pendingAddPlanWeekendKey) { _, weekendKey in
             guard let weekendKey else { return }
-            addPlanWeekendKey = weekendKey
-            bypassProtectionCheck = state.pendingAddPlanBypassProtection
-            showAddPlan = true
+            addPlanPresentation = AddPlanPresentation(
+                weekendKey: weekendKey,
+                bypassProtection: state.pendingAddPlanBypassProtection
+            )
             state.consumePendingAddPlanSelection()
         }
     }
 
     @ViewBuilder
-    private func pageLayout<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func pageLayout<Content: View>(
+        showLegend: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(spacing: 16) {
-            HeaderView()
-            LegendView()
+            if showLegend {
+                LegendView()
+            }
             content()
         }
         .padding(.horizontal, 20)
-        .padding(.top, 24)
+        .padding(.top, showLegend ? 24 : 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -135,18 +148,10 @@ struct RootView: View {
     }
 }
 
-struct HeaderView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("The Weekend")
-                .font(.system(size: 34, weight: .semibold, design: .rounded))
-            Text("YOUR NEXT 12 MONTHS AT A GLANCE")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .tracking(3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
+private struct AddPlanPresentation: Identifiable {
+    let id = UUID()
+    let weekendKey: String?
+    let bypassProtection: Bool
 }
 
 struct LegendView: View {
@@ -225,6 +230,7 @@ struct TabBarView: View {
 
 struct OverviewView: View {
     @EnvironmentObject private var state: AppState
+    @Environment(\.colorScheme) private var colorScheme
     var onSelectWeekend: (String) -> Void
     var onSelectMonth: (String) -> Void
 
@@ -232,11 +238,7 @@ struct OverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(yearSections) { section in
-                    Text(String(section.year))
-                        .font(.caption)
-                        .tracking(3)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    yearDividerHeader(section.year)
 
                     LazyVGrid(columns: overviewColumns, spacing: 14) {
                         ForEach(section.months) { option in
@@ -254,7 +256,7 @@ struct OverviewView: View {
     }
 
     private var yearSections: [OverviewYearSection] {
-        let months = CalendarHelper.getMonths().filter { CalendarHelper.hasRemainingWeekends($0) }
+        let months = CalendarHelper.getMonths().filter { !isMonthInPast($0) }
         var sections: [OverviewYearSection] = []
 
         for month in months {
@@ -268,6 +270,38 @@ struct OverviewView: View {
         }
 
         return sections
+    }
+
+    @ViewBuilder
+    private func yearDividerHeader(_ year: Int) -> some View {
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(yearDividerColor)
+                .frame(height: 1)
+            Text(String(year))
+                .font(.caption.weight(.semibold))
+                .tracking(2)
+                .foregroundColor(.secondary)
+            Rectangle()
+                .fill(yearDividerColor)
+                .frame(height: 1)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var yearDividerColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.6) : Color.cardStroke.opacity(0.95)
+    }
+
+    private func isMonthInPast(_ option: MonthOption) -> Bool {
+        guard let monthDate = CalendarHelper.parseKey(option.key) else { return false }
+        let monthStart = CalendarHelper.calendar.date(
+            from: CalendarHelper.calendar.dateComponents([.year, .month], from: monthDate)
+        ) ?? monthDate
+        let currentMonthStart = CalendarHelper.calendar.date(
+            from: CalendarHelper.calendar.dateComponents([.year, .month], from: Date())
+        ) ?? Date()
+        return monthStart < currentMonthStart
     }
 
     @ViewBuilder
@@ -331,10 +365,6 @@ struct WeekendView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Choose a month to see every weekend and what is planned.")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-
                 MonthSelectorView(selectedKey: $state.selectedMonthKey)
 
                 MonthDisplayView(selectedKey: state.selectedMonthKey, onSelectWeekend: onSelectWeekend)
@@ -345,11 +375,15 @@ struct WeekendView: View {
 
 struct MonthSelectorView: View {
     @Binding var selectedKey: String
+    @State private var selectedYear = CalendarHelper.currentPlanningYear()
 
     var body: some View {
         let options = CalendarHelper.getMonthOptions()
         let quickOptions = quickSelectorOptions(from: options)
-        let yearSections = monthSelectorYearSections(from: options.filter { $0.year != nil })
+        let yearOptions = CalendarHelper.planningYears()
+        let monthOptions = options
+            .filter { $0.year == selectedYear }
+            .sorted { $0.key < $1.key }
 
         VStack(alignment: .leading, spacing: 6) {
             if !quickOptions.isEmpty {
@@ -360,19 +394,21 @@ struct MonthSelectorView: View {
                 }
             }
 
-            ForEach(yearSections) { section in
-                Text(String(section.year))
-                    .font(.caption)
-                    .tracking(3)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
+            VStack(alignment: .leading, spacing: 8) {
+                yearSelector(yearOptions: yearOptions)
                 LazyVGrid(columns: monthSelectorColumns, alignment: .leading, spacing: 6) {
-                    ForEach(section.options) { option in
+                    ForEach(monthOptions) { option in
                         monthOptionButton(option)
+                            .disabled(isMonthInPast(option))
                     }
                 }
             }
+        }
+        .onAppear {
+            syncYearToCurrentSelection(options: options)
+        }
+        .onChange(of: selectedKey) { _, _ in
+            syncYearToCurrentSelection(options: CalendarHelper.getMonthOptions())
         }
     }
 
@@ -385,7 +421,7 @@ struct MonthSelectorView: View {
     }
 
     private func quickSelectorOptions(from options: [MonthOption]) -> [MonthOption] {
-        let priority = ["upcoming", "previous"]
+        let priority = ["upcoming", "historical"]
         return options
             .filter { priority.contains($0.key) }
             .sorted { lhs, rhs in
@@ -393,21 +429,36 @@ struct MonthSelectorView: View {
             }
     }
 
-    private func monthSelectorYearSections(from options: [MonthOption]) -> [MonthSelectorYearSection] {
-        var sections: [MonthSelectorYearSection] = []
-        for option in options {
-            guard let year = option.year else { continue }
-            if let lastIndex = sections.indices.last, sections[lastIndex].year == year {
-                sections[lastIndex].options.append(option)
-            } else {
-                sections.append(MonthSelectorYearSection(year: year, options: [option]))
+    @ViewBuilder
+    private func yearSelector(yearOptions: [Int]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Menu {
+                ForEach(yearOptions, id: \.self) { year in
+                    Button(String(year)) {
+                        selectYear(year)
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(String(selectedYear))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.semibold))
+                }
+                .font(.title3.weight(.medium))
+                .foregroundColor(.planBlue)
             }
+            .buttonStyle(.plain)
+
+            Rectangle()
+                .fill(Color.cardStroke.opacity(0.85))
+                .frame(height: 0.5)
         }
-        return sections
     }
 
     @ViewBuilder
     private func monthOptionButton(_ option: MonthOption) -> some View {
+        let isPast = isMonthInPast(option)
+        let isSelected = selectedKey == option.key && !isPast
         Button(action: { selectedKey = option.key }) {
             Text(option.shortLabel)
                 .font(.footnote.weight(.semibold))
@@ -415,14 +466,50 @@ struct MonthSelectorView: View {
                 .minimumScaleFactor(0.85)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
-                .background(selectedKey == option.key ? Color.black.opacity(0.9) : Color.cardBackground)
-                .foregroundColor(selectedKey == option.key ? .white : .primary)
+                .background(
+                    isSelected
+                        ? Color.black.opacity(0.9)
+                        : (isPast ? Color.secondary.opacity(0.16) : Color.cardBackground)
+                )
+                .foregroundColor(
+                    isSelected
+                        ? .white
+                        : (isPast ? .secondary : .primary)
+                )
                 .clipShape(Capsule())
                 .overlay(
                     Capsule().stroke(Color.cardStroke, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
+        .opacity(isPast ? 0.78 : 1)
+    }
+
+    private func syncYearToCurrentSelection(options: [MonthOption]) {
+        guard let selectedOption = options.first(where: { $0.key == selectedKey }),
+              let selectedOptionYear = selectedOption.year else {
+            return
+        }
+        selectedYear = selectedOptionYear
+    }
+
+    private func selectYear(_ year: Int) {
+        selectedYear = year
+        let options = CalendarHelper.getMonthOptions()
+        let monthOptions = options.filter { $0.year == year }.sorted { $0.key < $1.key }
+        guard let currentMonth = monthOptions.first(where: { !isMonthInPast($0) }) ?? monthOptions.first else { return }
+        selectedKey = currentMonth.key
+    }
+
+    private func isMonthInPast(_ option: MonthOption) -> Bool {
+        guard let monthDate = CalendarHelper.parseKey(option.key) else { return false }
+        let monthStart = CalendarHelper.calendar.date(
+            from: CalendarHelper.calendar.dateComponents([.year, .month], from: monthDate)
+        ) ?? monthDate
+        let currentMonthStart = CalendarHelper.calendar.date(
+            from: CalendarHelper.calendar.dateComponents([.year, .month], from: Date())
+        ) ?? Date()
+        return monthStart < currentMonthStart
     }
 }
 
@@ -434,8 +521,8 @@ struct MonthDisplayView: View {
     var body: some View {
         let options = CalendarHelper.getMonthOptions()
         if let option = options.first(where: { $0.key == selectedKey }) ?? options.first {
-            if option.key == "previous" {
-                previousPlansCard(for: option)
+            if option.key == "historical" {
+                historicalPlansCard(for: option)
             } else {
                 upcomingPlansCard(for: option)
             }
@@ -486,7 +573,7 @@ struct MonthDisplayView: View {
     }
 
     @ViewBuilder
-    private func previousPlansCard(for option: MonthOption) -> some View {
+    private func historicalPlansCard(for option: MonthOption) -> some View {
         CardContainer {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -499,7 +586,7 @@ struct MonthDisplayView: View {
                 }
 
                 if pastEventEntries.isEmpty {
-                    Text("No past plans from the previous 12 months.")
+                    Text("No past plans from the last 12 months.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                 } else {
@@ -663,13 +750,8 @@ struct WeekendRowView: View {
                         Text(weekend.label)
                             .font(.headline)
                         Spacer(minLength: 8)
-                        readinessBadge(for: state.readiness(for: weekendKey))
+                        statusPill
                     }
-                    Text(status.label)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .textCase(.uppercase)
-                        .tracking(1)
                 }
 
                 quickAddChips(weekendKey: weekendKey)
@@ -818,39 +900,43 @@ struct WeekendRowView: View {
         }
     }
 
-    private func readinessBadge(for readiness: WeekendReadinessState) -> some View {
-        Text(readiness.label)
+    private var statusPill: some View {
+        Text(status.label)
             .font(.caption2.weight(.semibold))
-            .foregroundColor(readinessForeground(readiness))
+            .foregroundColor(statusPillForeground)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background(readinessBackground(readiness))
+            .background(statusPillBackground)
             .clipShape(Capsule())
     }
 
-    private func readinessForeground(_ readiness: WeekendReadinessState) -> Color {
-        switch readiness {
-        case .protected:
+    private var statusPillForeground: Color {
+        switch status.type {
+        case "travel":
+            return .travelCoral
+        case "plan":
+            return .planBlue
+        case "protected":
             return .orange
-        case .ready:
-            return .green
-        case .partiallyPlanned:
-            return .blue
-        case .unplanned:
-            return .secondary
+        case "free":
+            return .freeGreen
+        default:
+            return .freeGreen
         }
     }
 
-    private func readinessBackground(_ readiness: WeekendReadinessState) -> Color {
-        switch readiness {
-        case .protected:
+    private var statusPillBackground: Color {
+        switch status.type {
+        case "travel":
+            return Color.travelCoral.opacity(0.14)
+        case "plan":
+            return Color.planBlue.opacity(0.14)
+        case "protected":
             return Color.orange.opacity(0.16)
-        case .ready:
-            return Color.green.opacity(0.14)
-        case .partiallyPlanned:
-            return Color.blue.opacity(0.14)
-        case .unplanned:
-            return Color.secondary.opacity(0.12)
+        case "free":
+            return Color.freeGreen.opacity(0.14)
+        default:
+            return Color.freeGreen.opacity(0.14)
         }
     }
 }
@@ -1120,20 +1206,30 @@ struct WeekendDetailsView: View {
             }
 
             HStack {
-                Text(isProtected ? "Protected" : "Not protected")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button(isProtected ? "Remove protection" : "Protect weekend") {
-                    if isProtected {
-                        Task { await state.toggleProtection(weekendKey: weekendKey, removePlans: false) }
-                    } else if events.isEmpty {
-                        Task { await state.toggleProtection(weekendKey: weekendKey, removePlans: false) }
-                    } else {
-                        showProtectionPrompt = true
+                Toggle(isOn: Binding(
+                    get: { isProtected },
+                    set: { shouldProtect in
+                        guard shouldProtect != isProtected else { return }
+                        if shouldProtect {
+                            if events.isEmpty {
+                                Task { await state.toggleProtection(weekendKey: weekendKey, removePlans: false) }
+                            } else {
+                                showProtectionPrompt = true
+                            }
+                        } else {
+                            Task { await state.toggleProtection(weekendKey: weekendKey, removePlans: false) }
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Protect weekend")
+                        Text(isProtected ? "Protected" : "Not protected")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
-                .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
+                .toggleStyle(.switch)
+                .tint(.planBlue)
             }
 
             Button("Add plans for this weekend") {
@@ -1323,11 +1419,11 @@ struct AddPlanView: View {
 
     let weekendKey: String?
     let bypassProtection: Bool
-    var editingEvent: WeekendEvent? = nil
+    let editingEvent: WeekendEvent?
 
     @State private var title = ""
     @State private var planType: PlanType = .plan
-    @State private var date = Date()
+    @State private var date: Date
     @State private var selectedDays: Set<WeekendDay> = [.sat, .sun]
     @State private var allDay = false
     @State private var startTime = CalendarHelper.calendar.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
@@ -1341,6 +1437,22 @@ struct AddPlanView: View {
     @State private var showTemplateSavePrompt = false
     @State private var templateName = ""
     @State private var hasInitialized = false
+
+    init(weekendKey: String?, bypassProtection: Bool, editingEvent: WeekendEvent? = nil) {
+        self.weekendKey = weekendKey
+        self.bypassProtection = bypassProtection
+        self.editingEvent = editingEvent
+
+        if let editingEvent,
+           let editingDate = Self.defaultWeekendDate(from: editingEvent.weekendKey) {
+            _date = State(initialValue: editingDate)
+        } else if let weekendKey,
+                  let selectedDate = Self.defaultWeekendDate(from: weekendKey) {
+            _date = State(initialValue: selectedDate)
+        } else {
+            _date = State(initialValue: Date())
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -1396,7 +1508,12 @@ struct AddPlanView: View {
                 }
 
                 Section(header: Text("Weekend")) {
-                    DatePicker("Choose a weekend date", selection: $date, displayedComponents: .date)
+                    DatePicker(
+                        "Choose a weekend date",
+                        selection: $date,
+                        in: weekendDateRange,
+                        displayedComponents: .date
+                    )
                 }
 
                 Section(header: Text("Days")) {
@@ -1492,6 +1609,10 @@ struct AddPlanView: View {
             .onAppear {
                 configureInitialState()
             }
+            .onChange(of: weekendKey) { _, newValue in
+                guard !isEditing, let newValue else { return }
+                applyDefaultWeekendDate(from: newValue)
+            }
             .task(id: conflictTaskToken) {
                 await refreshCalendarConflicts()
             }
@@ -1550,7 +1671,7 @@ struct AddPlanView: View {
         if let editingEvent {
             title = editingEvent.title
             planType = editingEvent.planType
-            if let editDate = CalendarHelper.parseKey(editingEvent.weekendKey) {
+            if let editDate = Self.defaultWeekendDate(from: editingEvent.weekendKey) {
                 date = editDate
             }
             selectedDays = Set(editingEvent.dayValues)
@@ -1565,9 +1686,32 @@ struct AddPlanView: View {
             return
         }
 
-        if let key = weekendKey, let selectedDate = CalendarHelper.parseKey(key) {
-            date = selectedDate
+        if let key = weekendKey {
+            applyDefaultWeekendDate(from: key)
         }
+    }
+
+    private func applyDefaultWeekendDate(from key: String) {
+        guard let selectedDate = Self.defaultWeekendDate(from: key) else { return }
+        date = selectedDate
+    }
+
+    private static func defaultWeekendDate(from key: String) -> Date? {
+        guard let parsed = CalendarHelper.parseKey(key) else { return nil }
+        let normalizedKey = CalendarHelper.weekendKey(for: parsed) ?? key
+        guard let saturday = CalendarHelper.parseKey(normalizedKey) else { return parsed }
+        return CalendarHelper.calendar.startOfDay(for: saturday)
+    }
+
+    private var weekendDateRange: ClosedRange<Date> {
+        let planningRange = CalendarHelper.planningDateRange()
+        if date < planningRange.lowerBound {
+            return date...planningRange.upperBound
+        }
+        if date > planningRange.upperBound {
+            return planningRange.lowerBound...date
+        }
+        return planningRange
     }
 
     private func applyStarter(_ event: WeekendEvent) {
@@ -1765,492 +1909,98 @@ struct AddPlanView: View {
     }
 }
 
-struct SettingsView: View {
-    @EnvironmentObject private var state: AppState
+struct CalendarInviteQRSheet: View {
+    let calendar: PlannerCalendar
+    var onCopyCode: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    private let ciContext = CIContext()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Settings")
-                        .font(.headline)
-                    Text("Manage your account, preferences, and notifications.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                }
+        VStack(spacing: 16) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.35))
+                .frame(width: 46, height: 6)
+                .padding(.top, 6)
 
-                CardContainer {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Account")
-                            .font(.headline)
-                        Text(state.session?.user.email ?? "Signed out")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                        Button("Sign out") {
-                            Task { await state.signOut() }
-                        }
-                        .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
-                    }
-                }
+            Text("Invite to \(calendar.name)")
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
 
-                CardContainer {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Preferences")
-                            .font(.headline)
-                        Toggle("Use dark mode", isOn: Binding(
-                            get: { state.useDarkMode },
-                            set: { state.setTheme($0) }
-                        ))
-                        Toggle("Block new plans on protected weekends", isOn: Binding(
-                            get: { state.protectionMode == .block },
-                            set: { state.setProtectionMode($0 ? .block : .warn) }
-                        ))
-                    }
-                }
-
-                CardContainer {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Notifications")
-                            .font(.headline)
-                        HStack {
-                            Text("Status")
-                            Spacer()
-                            Text(state.notificationPermissionState.label)
-                                .foregroundColor(.secondary)
-                        }
-
-                        if state.notificationPermissionState == .notDetermined {
-                            Button("Enable notifications") {
-                                Task { await state.requestNotificationPermissionIfNeeded() }
-                            }
-                            .buttonStyle(PillButtonStyle(fill: .black.opacity(0.9), foreground: .white))
-                        }
-
-                        if state.notificationPermissionState == .denied {
-                            Button("Open iOS Settings") {
-                                openSystemSettings()
-                            }
-                            .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
-                        }
-
-                        Toggle("Weekly weekend summary", isOn: weeklySummaryEnabledBinding)
-                        if state.notificationPreferences.weeklySummaryEnabled {
-                            Picker("Summary day", selection: weeklySummaryWeekdayBinding) {
-                                ForEach(weekdayOptions) { option in
-                                    Text(option.label).tag(option.value)
-                                }
-                            }
-                            .pickerStyle(.menu)
-
-                            DatePicker(
-                                "Summary time",
-                                selection: weeklySummaryTimeBinding,
-                                displayedComponents: .hourAndMinute
-                            )
-                        }
-
-                        Toggle("Planning nudge for free weekends", isOn: planningNudgeEnabledBinding)
-                        if state.notificationPreferences.planningNudgeEnabled {
-                            Picker("Nudge day", selection: planningNudgeWeekdayBinding) {
-                                ForEach(weekdayOptions) { option in
-                                    Text(option.label).tag(option.value)
-                                }
-                            }
-                            .pickerStyle(.menu)
-
-                            DatePicker(
-                                "Nudge time",
-                                selection: planningNudgeTimeBinding,
-                                displayedComponents: .hourAndMinute
-                            )
-                        }
-
-                        Toggle("Event reminders", isOn: eventReminderEnabledBinding)
-                        if state.notificationPreferences.eventReminderEnabled {
-                            Picker("Remind me before events", selection: eventLeadMinutesBinding) {
-                                ForEach(eventLeadOptions, id: \.self) { minutes in
-                                    Text(leadTimeLabel(for: minutes)).tag(minutes)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                        }
-
-                        Toggle("Sunday wrap-up reminder", isOn: sundayWrapUpEnabledBinding)
-                        Toggle("Monday recap reminder", isOn: mondayRecapEnabledBinding)
-
-                        Text("Reminder times use your current iPhone time zone.")
+            if let image = qrCodeImage(for: calendar.shareCode) {
+                Image(uiImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 240, height: 240)
+                    .padding(10)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.cardStroke, lineWidth: 1)
+                    )
+            } else {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.secondary.opacity(0.1))
+                    .frame(width: 240, height: 240)
+                    .overlay(
+                        Text("Could not generate QR code.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    }
-                }
-
-                CardContainer {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Calendar Integration")
-                            .font(.headline)
-                        HStack {
-                            Text("Status")
-                            Spacer()
-                            Text(state.calendarPermissionState.label)
-                                .foregroundColor(.secondary)
-                        }
-
-                        if state.calendarPermissionState == .notDetermined {
-                            Button("Enable calendar access") {
-                                Task { await state.requestCalendarPermissionIfNeeded() }
-                            }
-                            .buttonStyle(PillButtonStyle(fill: .black.opacity(0.9), foreground: .white))
-                        }
-
-                        if state.calendarPermissionState == .denied || state.calendarPermissionState == .restricted {
-                            Button("Open iOS Settings") {
-                                openSystemSettings()
-                            }
-                            .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
-                        }
-
-                        Text("Used for conflict checks and optional Apple Calendar export when saving plans.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                CardContainer {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Plan Templates")
-                            .font(.headline)
-                        if state.planTemplates.isEmpty {
-                            Text("No templates saved yet. Save one from the Add Plan form.")
-                                .font(.callout)
-                                .foregroundColor(.secondary)
-                        } else {
-                            ForEach(state.planTemplates.prefix(6)) { template in
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(template.name)
-                                            .font(.subheadline.weight(.semibold))
-                                        Text(template.title)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Button("Delete") {
-                                        state.removeTemplate(template)
-                                    }
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundColor(.red)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                CardContainer {
-                    let report = state.weeklyReportSnapshot()
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Private Weekly Report")
-                            .font(.headline)
-
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Created this week")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("\(report.thisWeekCreated)")
-                                    .font(.title3.weight(.semibold))
-                            }
-                            Spacer()
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Completed this week")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("\(report.thisWeekCompleted)")
-                                    .font(.title3.weight(.semibold))
-                            }
-                        }
-
-                        Text("Last week: \(report.lastWeekCreated) created, \(report.lastWeekCompleted) completed")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        HStack {
-                            TagPill(text: "Current streak \(report.currentStreak)", color: .planBlue)
-                            TagPill(text: "Best \(report.bestStreak)", color: .freeGreen)
-                        }
-
-                        Stepper(
-                            "Monthly created goal: \(report.goalPlannedTarget)",
-                            value: plannedGoalBinding,
-                            in: 0...40
-                        )
-                        Stepper(
-                            "Monthly completed goal: \(report.goalCompletedTarget)",
-                            value: completedGoalBinding,
-                            in: 0...40
-                        )
-
-                        Text("Goal progress: \(report.goalPlannedProgress)/\(report.goalPlannedTarget) created • \(report.goalCompletedProgress)/\(report.goalCompletedTarget) completed")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                CardContainer {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Sync Status")
-                                .font(.headline)
-                            Spacer()
-                            Text(state.pendingOperations.isEmpty ? "All synced" : "\(state.pendingOperations.count) pending")
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(state.pendingOperations.isEmpty ? .secondary : .orange)
-                        }
-                        if state.isSyncing {
-                            Text("Sync in progress...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else if !state.pendingOperations.isEmpty {
-                            Text("Pending changes will retry automatically when connection is available.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                }
-
-                CardContainer {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Activity History (30 days)")
-                            .font(.headline)
-                        if state.auditEntries.isEmpty {
-                            Text("No activity yet.")
-                                .font(.callout)
-                                .foregroundColor(.secondary)
-                        } else {
-                            ForEach(state.auditEntries.prefix(12)) { entry in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(entry.action)
-                                        .font(.subheadline.weight(.semibold))
-                                    Text(auditTimestamp(entry.occurredAt))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }
-                }
+                    )
             }
-        }
-        .task {
-            await state.refreshNotificationPermissionState()
-            await state.refreshCalendarPermissionState()
-            await state.flushPendingOperations()
-        }
-    }
 
-    private struct WeekdayOption: Identifiable {
-        let value: Int
-        let label: String
-
-        var id: Int { value }
-    }
-
-    private var weekdayOptions: [WeekdayOption] {
-        let symbols = Calendar.current.weekdaySymbols
-        return symbols.enumerated().map { (index, value) in
-            WeekdayOption(value: index + 1, label: value)
-        }
-    }
-
-    private var eventLeadOptions: [Int] {
-        let base = [15, 30, 60, 90, 120, 180, 240]
-        let current = state.notificationPreferences.eventLeadMinutes
-        if base.contains(current) {
-            return base
-        }
-        return (base + [max(0, current)]).sorted()
-    }
-
-    private var weeklySummaryEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { state.notificationPreferences.weeklySummaryEnabled },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.weeklySummaryEnabled = value
-                }
-            }
-        )
-    }
-
-    private var planningNudgeEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { state.notificationPreferences.planningNudgeEnabled },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.planningNudgeEnabled = value
-                }
-            }
-        )
-    }
-
-    private var eventReminderEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { state.notificationPreferences.eventReminderEnabled },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.eventReminderEnabled = value
-                }
-            }
-        )
-    }
-
-    private var sundayWrapUpEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { state.notificationPreferences.sundayWrapUpEnabled },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.sundayWrapUpEnabled = value
-                }
-            }
-        )
-    }
-
-    private var mondayRecapEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { state.notificationPreferences.mondayRecapEnabled },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.mondayRecapEnabled = value
-                }
-            }
-        )
-    }
-
-    private var weeklySummaryWeekdayBinding: Binding<Int> {
-        Binding(
-            get: { state.notificationPreferences.weeklySummaryWeekday },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.weeklySummaryWeekday = min(max(value, 1), 7)
-                }
-            }
-        )
-    }
-
-    private var planningNudgeWeekdayBinding: Binding<Int> {
-        Binding(
-            get: { state.notificationPreferences.planningNudgeWeekday },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.planningNudgeWeekday = min(max(value, 1), 7)
-                }
-            }
-        )
-    }
-
-    private var eventLeadMinutesBinding: Binding<Int> {
-        Binding(
-            get: { state.notificationPreferences.eventLeadMinutes },
-            set: { value in
-                state.updateNotificationPreferences { preferences in
-                    preferences.eventLeadMinutes = max(0, value)
-                }
-            }
-        )
-    }
-
-    private var weeklySummaryTimeBinding: Binding<Date> {
-        Binding(
-            get: {
-                timeDate(hour: state.notificationPreferences.weeklySummaryHour, minute: state.notificationPreferences.weeklySummaryMinute)
-            },
-            set: { value in
-                let components = Calendar.current.dateComponents([.hour, .minute], from: value)
-                state.updateNotificationPreferences { preferences in
-                    preferences.weeklySummaryHour = components.hour ?? 18
-                    preferences.weeklySummaryMinute = components.minute ?? 0
-                }
-            }
-        )
-    }
-
-    private var planningNudgeTimeBinding: Binding<Date> {
-        Binding(
-            get: {
-                timeDate(hour: state.notificationPreferences.planningNudgeHour, minute: state.notificationPreferences.planningNudgeMinute)
-            },
-            set: { value in
-                let components = Calendar.current.dateComponents([.hour, .minute], from: value)
-                state.updateNotificationPreferences { preferences in
-                    preferences.planningNudgeHour = components.hour ?? 10
-                    preferences.planningNudgeMinute = components.minute ?? 0
-                }
-            }
-        )
-    }
-
-    private func timeDate(hour: Int, minute: Int) -> Date {
-        let now = Date()
-        return Calendar.current.date(
-            bySettingHour: min(max(hour, 0), 23),
-            minute: min(max(minute, 0), 59),
-            second: 0,
-            of: now
-        ) ?? now
-    }
-
-    private func leadTimeLabel(for minutes: Int) -> String {
-        if minutes < 60 {
-            return "\(minutes) minutes before"
-        }
-        if minutes.isMultiple(of: 60) {
-            let hours = minutes / 60
-            return "\(hours) \(hours == 1 ? "hour" : "hours") before"
-        }
-        let hours = Double(minutes) / 60.0
-        return String(format: "%.1f hours before", hours)
-    }
-
-    private var plannedGoalBinding: Binding<Int> {
-        Binding(
-            get: { state.weeklyReportSnapshot().goalPlannedTarget },
-            set: { value in
-                let snapshot = state.weeklyReportSnapshot()
-                state.setMonthlyGoal(
-                    monthKey: snapshot.goalMonthKey,
-                    plannedTarget: value,
-                    completedTarget: snapshot.goalCompletedTarget
+            Text("Share code: \(calendar.shareCode)")
+                .font(.body.monospaced().weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.dayCardBackground)
                 )
-            }
-        )
-    }
-
-    private var completedGoalBinding: Binding<Int> {
-        Binding(
-            get: { state.weeklyReportSnapshot().goalCompletedTarget },
-            set: { value in
-                let snapshot = state.weeklyReportSnapshot()
-                state.setMonthlyGoal(
-                    monthKey: snapshot.goalMonthKey,
-                    plannedTarget: snapshot.goalPlannedTarget,
-                    completedTarget: value
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.dayCardStroke, lineWidth: 1)
                 )
+
+            Text("Ask your collaborator to scan this QR code, then paste the code into Join shared calendar.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+
+            Button {
+                onCopyCode(calendar.shareCode)
+            } label: {
+                Label("Copy invite code", systemImage: "doc.on.doc")
+                    .frame(maxWidth: .infinity)
             }
-        )
+            .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
+            .padding(.horizontal, 20)
+
+            Button("Done") {
+                dismiss()
+            }
+            .buttonStyle(PillButtonStyle(fill: .black.opacity(0.9), foreground: .white))
+            .padding(.horizontal, 20)
+            .padding(.bottom, 16)
+        }
+        .padding(.top, 8)
+        .presentationDetents([.medium])
     }
 
-    private func auditTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
-    }
+    private func qrCodeImage(for code: String) -> UIImage? {
+        guard let data = code.data(using: .utf8) else { return nil }
 
-    private func openSystemSettings() {
-        #if canImport(UIKit)
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        UIApplication.shared.open(url)
-        #endif
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = data
+        filter.correctionLevel = "M"
+
+        guard let outputImage = filter.outputImage else { return nil }
+        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: 12, y: 12))
+        guard let cgImage = ciContext.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 }
 
@@ -2323,13 +2073,6 @@ struct WeekendSelection: Identifiable {
 struct OverviewYearSection: Identifiable {
     let year: Int
     var months: [MonthOption]
-
-    var id: Int { year }
-}
-
-struct MonthSelectorYearSection: Identifiable {
-    let year: Int
-    var options: [MonthOption]
 
     var id: Int { year }
 }
