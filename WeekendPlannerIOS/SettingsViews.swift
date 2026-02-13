@@ -122,9 +122,10 @@ struct SettingsHomeView: View {
     }
 
     private var preferencesSubtitle: String {
-        let theme = state.useDarkMode ? "Dark mode on" : "Light mode"
+        let theme = "\(state.appTheme.label) theme"
         let protection = state.protectionMode == .block ? "Block protected weekends" : "Warn on protected weekends"
-        return "\(theme) • \(protection)"
+        let countdownTimeZone = state.countdownTimeZoneIdentifier == nil ? "System countdown time" : "Custom countdown time"
+        return "\(theme) • \(protection) • \(countdownTimeZone)"
     }
 
     private var appVersionSubtitle: String {
@@ -588,13 +589,18 @@ struct PreferencesSettingsView: View {
     var body: some View {
         List {
             Section {
-                Toggle(
-                    "Dark mode",
-                    isOn: Binding(
-                        get: { state.useDarkMode },
+                Picker(
+                    "Appearance",
+                    selection: Binding(
+                        get: { state.appTheme },
                         set: { state.setTheme($0) }
                     )
-                )
+                ) {
+                    ForEach(AppTheme.allCases, id: \.self) { theme in
+                        Text(theme.label).tag(theme)
+                    }
+                }
+                .pickerStyle(.segmented)
                 Toggle(
                     "Block new plans on protected weekends",
                     isOn: Binding(
@@ -602,13 +608,111 @@ struct PreferencesSettingsView: View {
                         set: { state.setProtectionMode($0 ? .block : .warn) }
                     )
                 )
+                NavigationLink {
+                    CountdownTimeZoneSettingsView()
+                } label: {
+                    LabeledContent("Weekend countdown time zone", value: state.countdownTimeZoneDisplayName)
+                }
             } footer: {
-                Text("Use block mode to prevent adding plans on protected weekends.")
+                Text("Use System appearance to follow iOS styling. Use block mode to prevent adding plans on protected weekends. Choose a custom time zone if you want weekend countdowns to follow a different region.")
             }
         }
         .weekendSettingsListStyle()
         .navigationTitle("Preferences")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct CountdownTimeZoneSettingsView: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchText = ""
+
+    private static let allIdentifiers = TimeZone.knownTimeZoneIdentifiers.sorted()
+
+    var body: some View {
+        List {
+            Section {
+                Button {
+                    state.setCountdownTimeZoneIdentifier(nil)
+                    dismiss()
+                } label: {
+                    HStack {
+                        Text("Use device time zone")
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if state.countdownTimeZoneIdentifier == nil {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.planBlue)
+                        }
+                    }
+                }
+            } footer: {
+                Text("If enabled, countdown follows your iPhone's current time zone.")
+            }
+
+            Section("Time Zones") {
+                ForEach(filteredIdentifiers, id: \.self) { identifier in
+                    Button {
+                        state.setCountdownTimeZoneIdentifier(identifier)
+                        dismiss()
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(cityLabel(for: identifier))
+                                    .foregroundStyle(.primary)
+                                Text("\(regionLabel(for: identifier)) • \(gmtOffsetLabel(for: identifier))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if state.countdownTimeZoneIdentifier == identifier {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Color.planBlue)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .weekendSettingsListStyle()
+        .navigationTitle("Countdown Time Zone")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Search city or region")
+    }
+
+    private var filteredIdentifiers: [String] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return Self.allIdentifiers }
+        return Self.allIdentifiers.filter { identifier in
+            identifier.localizedCaseInsensitiveContains(query)
+                || cityLabel(for: identifier).localizedCaseInsensitiveContains(query)
+                || regionLabel(for: identifier).localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private func cityLabel(for identifier: String) -> String {
+        identifier
+            .split(separator: "/")
+            .last
+            .map { String($0).replacingOccurrences(of: "_", with: " ") }
+            ?? identifier
+    }
+
+    private func regionLabel(for identifier: String) -> String {
+        let components = identifier.split(separator: "/")
+        guard components.count > 1 else { return "Region" }
+        return components.dropLast().joined(separator: " / ").replacingOccurrences(of: "_", with: " ")
+    }
+
+    private func gmtOffsetLabel(for identifier: String) -> String {
+        guard let timeZone = TimeZone(identifier: identifier) else { return "GMT" }
+        let seconds = timeZone.secondsFromGMT(for: Date())
+        let sign = seconds >= 0 ? "+" : "-"
+        let absolute = abs(seconds)
+        let hours = absolute / 3600
+        let minutes = (absolute % 3600) / 60
+        return String(format: "GMT%@%02d:%02d", sign, hours, minutes)
     }
 }
 
@@ -853,9 +957,15 @@ private func copyShareCode(_ code: String) {
 }
 
 private extension View {
+    @ViewBuilder
     func weekendSettingsListStyle() -> some View {
-        listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Color.clear)
+        if #available(iOS 26.0, *) {
+            self.listStyle(.insetGrouped)
+        } else {
+            self
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+        }
     }
 }

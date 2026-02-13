@@ -9,7 +9,7 @@ struct TheWeekendApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(state)
-                .preferredColorScheme(state.useDarkMode ? .dark : .light)
+                .preferredColorScheme(state.appTheme.preferredColorScheme)
                 .task {
                     await state.bootstrap()
                 }
