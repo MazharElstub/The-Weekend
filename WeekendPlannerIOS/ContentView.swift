@@ -15,7 +15,7 @@ struct RootView: View {
             AppGradientBackground()
             TabView(selection: $state.selectedTab) {
                 NavigationStack {
-                    pageLayout(showLegend: true) {
+                    tabListLayout(showLegend: true) {
                         OverviewView(
                             onSelectWeekend: { key in
                                 detailSelection = WeekendSelection(id: key)
@@ -35,7 +35,7 @@ struct RootView: View {
                 }
 
                 NavigationStack {
-                    pageLayout {
+                    tabListLayout {
                         WeekendView(onSelectWeekend: { key in
                             detailSelection = WeekendSelection(id: key)
                         })
@@ -55,8 +55,7 @@ struct RootView: View {
                 }
             }
             .tint(.planBlue)
-            .toolbarBackground(.visible, for: .tabBar)
-            .toolbarBackground(.ultraThinMaterial, for: .tabBar)
+            .modifier(LegacyTabBarBackgroundModifier())
             .simultaneousGesture(
                 DragGesture(minimumDistance: 30, coordinateSpace: .local)
                     .onEnded { value in
@@ -103,19 +102,23 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func pageLayout<Content: View>(
+    private func tabListLayout<Content: View>(
         showLegend: Bool = false,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(spacing: 16) {
+        List {
             if showLegend {
                 LegendView()
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                    .listRowBackground(Color.clear)
             }
             content()
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 12, trailing: 20))
+                .listRowBackground(Color.clear)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, showLegend ? 24 : 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .weekendTabListStyle()
     }
 
     private func handleTabSwipe(_ value: DragGesture.Value) {
@@ -154,9 +157,39 @@ private struct AddPlanPresentation: Identifiable {
     let bypassProtection: Bool
 }
 
+private struct LegacyTabBarBackgroundModifier: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+        } else {
+            content
+                .toolbarBackground(.visible, for: .tabBar)
+                .toolbarBackground(.ultraThinMaterial, for: .tabBar)
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func weekendTabListStyle() -> some View {
+        if #available(iOS 26.0, *) {
+            self
+                .listStyle(.insetGrouped)
+                .contentMargins(.top, 0, for: .scrollContent)
+        } else {
+            self
+                .listStyle(.insetGrouped)
+                .contentMargins(.top, 0, for: .scrollContent)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+        }
+    }
+}
+
 struct LegendView: View {
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             legendItem(text: "Free") {
                 StatusDot(color: .freeGreen)
             }
@@ -170,28 +203,27 @@ struct LegendView: View {
                 ProtectedStripeDot(size: 10)
             }
         }
-        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .font(.system(size: 12, weight: .medium, design: .rounded))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.cardBackground)
+            RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
+                .fill(AppSurfaceStyle.settingsCardBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.cardStroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
+                .stroke(AppSurfaceStyle.settingsSeparator, lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.08), radius: 18, x: 0, y: 12)
     }
 
     @ViewBuilder
     private func legendItem<Icon: View>(text: String, @ViewBuilder icon: () -> Icon) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             icon()
             Text(text)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.82)
                 .allowsTightening(true)
         }
         .fixedSize(horizontal: true, vertical: false)
@@ -213,18 +245,154 @@ struct TabBarView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, 10)
                         .frame(height: 36)
-                        .background(
-                            Capsule().fill(selectedTab == tab ? Color.black.opacity(0.85) : Color.cardBackground)
-                        )
-                        .foregroundColor(selectedTab == tab ? .white : .primary)
+                        .background {
+                            if selectedTab == tab {
+                                Capsule().fill(AppSurfaceStyle.primaryButtonFill)
+                            } else {
+                                Capsule().fill(AppSurfaceStyle.dayItemFill)
+                            }
+                        }
+                        .foregroundColor(selectedTab == tab ? AppSurfaceStyle.primaryButtonForeground : .primary)
                         .overlay(
-                            Capsule().stroke(Color.cardStroke, lineWidth: 1)
+                            Capsule().stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
                         )
                 }
                 .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct WeekMeltRailView: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { timeline in
+            let countdown = WorkweekCountdownState.from(
+                date: timeline.date,
+                timeZone: appState.countdownTimeZone
+            )
+            HStack(spacing: 8) {
+                Text("Mon")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                GeometryReader { geometry in
+                    let width = geometry.size.width
+                    let remainingWidth = max(0, width * (1 - countdown.progress))
+                    let markerPosition = max(8, min(width - 8, width - remainingWidth))
+
+                    ZStack {
+                        Capsule()
+                            .fill(AppSurfaceStyle.settingsChipBackground)
+
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.planBlue.opacity(0.36),
+                                        Color.travelCoral.opacity(0.30),
+                                        Color.freeGreen.opacity(0.34)
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: remainingWidth)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+
+                        ForEach(1..<5, id: \.self) { index in
+                            Rectangle()
+                                .fill(AppSurfaceStyle.settingsSeparator.opacity(0.6))
+                                .frame(width: 1, height: 16)
+                                .position(
+                                    x: width * CGFloat(index) / 5.0,
+                                    y: geometry.size.height / 2
+                                )
+                        }
+
+                        if remainingWidth > 0 {
+                            Circle()
+                                .fill(Color.white.opacity(0.92))
+                                .frame(width: 16, height: 16)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.planBlue.opacity(0.6), lineWidth: 2)
+                                )
+                                .shadow(color: Color.planBlue.opacity(0.24), radius: 5, x: 0, y: 0)
+                                .position(x: markerPosition, y: geometry.size.height / 2)
+                        }
+
+                        Text(countdown.centerLabel)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                            .padding(.horizontal, 10)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.primary.opacity(0.18), lineWidth: 1.2)
+                    )
+                }
+                .frame(height: 32)
+
+                Text("Sat")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+            .highPriorityGesture(TapGesture().onEnded { })
+        }
+    }
+}
+
+private struct WorkweekCountdownState {
+    let progress: CGFloat
+    let centerLabel: String
+
+    static func from(date: Date, timeZone: TimeZone) -> WorkweekCountdownState {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let startOfToday = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: startOfToday)
+        let daysSinceMonday = (weekday + 5) % 7
+        let mondayStart = calendar.date(byAdding: .day, value: -daysSinceMonday, to: startOfToday) ?? startOfToday
+        let saturdayStart = calendar.date(byAdding: .day, value: 5, to: mondayStart) ?? mondayStart
+
+        let totalDuration = max(1, saturdayStart.timeIntervalSince(mondayStart))
+        let elapsed = min(max(0, date.timeIntervalSince(mondayStart)), totalDuration)
+        let progress = CGFloat(elapsed / totalDuration)
+
+        if date >= saturdayStart {
+            return WorkweekCountdownState(
+                progress: 1,
+                centerLabel: "Weekend is here"
+            )
+        }
+
+        let remaining = max(0, saturdayStart.timeIntervalSince(date))
+        return WorkweekCountdownState(
+            progress: progress,
+            centerLabel: "\(countdownText(remaining)) to weekend"
+        )
+    }
+
+    private static func countdownText(_ interval: TimeInterval) -> String {
+        let totalMinutes = Int(interval / 60)
+        let days = totalMinutes / (24 * 60)
+        let hours = (totalMinutes % (24 * 60)) / 60
+        let minutes = totalMinutes % 60
+
+        if days > 0 {
+            return "\(days)d \(hours)h"
+        }
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
     }
 }
 
@@ -235,20 +403,21 @@ struct OverviewView: View {
     var onSelectMonth: (String) -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                ForEach(yearSections) { section in
-                    yearDividerHeader(section.year)
+        VStack(alignment: .leading, spacing: 14) {
+            WeekMeltRailView()
 
-                    LazyVGrid(columns: overviewColumns, spacing: 14) {
-                        ForEach(section.months) { option in
-                            monthCard(for: option)
-                        }
+            ForEach(yearSections) { section in
+                yearDividerHeader(section.year)
+
+                LazyVGrid(columns: overviewColumns, spacing: 14) {
+                    ForEach(section.months) { option in
+                        monthCard(for: option)
                     }
                 }
             }
-            .padding(.top, 8)
         }
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var overviewColumns: [GridItem] {
@@ -290,7 +459,7 @@ struct OverviewView: View {
     }
 
     private var yearDividerColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.6) : Color.cardStroke.opacity(0.95)
+        colorScheme == .dark ? Color.white.opacity(0.6) : AppSurfaceStyle.settingsSeparator
     }
 
     private func isMonthInPast(_ option: MonthOption) -> Bool {
@@ -308,7 +477,7 @@ struct OverviewView: View {
     private func monthCard(for option: MonthOption) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(option.shortLabel)
-                .font(.headline)
+                .font(.body.weight(.medium))
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(12)), count: 5), alignment: .leading, spacing: 6) {
                 ForEach(option.weekends) { weekend in
                     let key = CalendarHelper.formatKey(weekend.saturday)
@@ -322,13 +491,13 @@ struct OverviewView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(AppSurfaceStyle.settingsCardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.cardStroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
+                .stroke(AppSurfaceStyle.settingsSeparator, lineWidth: 1)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous))
         .onTapGesture {
             onSelectMonth(option.key)
         }
@@ -363,13 +532,17 @@ struct WeekendView: View {
     var onSelectWeekend: (String) -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                MonthSelectorView(selectedKey: $state.selectedMonthKey)
+        VStack(alignment: .leading, spacing: 18) {
+            MonthSelectorView(selectedKey: $state.selectedMonthKey)
 
-                MonthDisplayView(selectedKey: state.selectedMonthKey, onSelectWeekend: onSelectWeekend)
-            }
+            Divider()
+                .overlay(AppSurfaceStyle.settingsSeparator)
+                .padding(.horizontal, 2)
+                .padding(.vertical, 2)
+
+            MonthDisplayView(selectedKey: state.selectedMonthKey, onSelectWeekend: onSelectWeekend)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -385,7 +558,7 @@ struct MonthSelectorView: View {
             .filter { $0.year == selectedYear }
             .sorted { $0.key < $1.key }
 
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             if !quickOptions.isEmpty {
                 LazyVGrid(columns: quickSelectorColumns, alignment: .leading, spacing: 6) {
                     ForEach(quickOptions) { option in
@@ -439,18 +612,28 @@ struct MonthSelectorView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     Text(String(selectedYear))
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                 }
-                .font(.title3.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundColor(.planBlue)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(AppSurfaceStyle.settingsCardBackground)
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(AppSurfaceStyle.settingsSeparator, lineWidth: 1)
+                )
             }
             .buttonStyle(.plain)
 
             Rectangle()
-                .fill(Color.cardStroke.opacity(0.85))
+                .fill(AppSurfaceStyle.settingsSeparator)
                 .frame(height: 0.5)
         }
     }
@@ -461,24 +644,28 @@ struct MonthSelectorView: View {
         let isSelected = selectedKey == option.key && !isPast
         Button(action: { selectedKey = option.key }) {
             Text(option.shortLabel)
-                .font(.footnote.weight(.semibold))
+                .font(.footnote.weight(.medium))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
-                .background(
-                    isSelected
-                        ? Color.black.opacity(0.9)
-                        : (isPast ? Color.secondary.opacity(0.16) : Color.cardBackground)
-                )
+                .background {
+                    if isSelected {
+                        Capsule().fill(AppSurfaceStyle.primaryButtonFill)
+                    } else if isPast {
+                        Capsule().fill(Color.secondary.opacity(0.16))
+                    } else {
+                        Capsule().fill(AppSurfaceStyle.settingsCardBackground)
+                    }
+                }
                 .foregroundColor(
                     isSelected
-                        ? .white
+                        ? AppSurfaceStyle.primaryButtonForeground
                         : (isPast ? .secondary : .primary)
                 )
                 .clipShape(Capsule())
                 .overlay(
-                    Capsule().stroke(Color.cardStroke, lineWidth: 1)
+                    Capsule().stroke(AppSurfaceStyle.settingsSeparator, lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
@@ -527,7 +714,7 @@ struct MonthDisplayView: View {
                 upcomingPlansCard(for: option)
             }
         } else {
-            CardContainer {
+            plannerMonthContainer {
                 Text("No month data available")
                     .font(.callout)
                     .foregroundColor(.secondary)
@@ -539,11 +726,11 @@ struct MonthDisplayView: View {
     private func upcomingPlansCard(for option: MonthOption) -> some View {
         let visibleWeekends = CalendarHelper.remainingWeekends(in: option.weekends)
 
-        CardContainer {
+        plannerMonthContainer {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text(option.key == "upcoming" ? option.title : option.shortLabel)
-                        .font(.headline)
+                        .font(.subheadline.weight(.medium))
                     Spacer()
                     Text(option.subtitle)
                         .font(.caption)
@@ -555,7 +742,7 @@ struct MonthDisplayView: View {
                         .font(.callout)
                         .foregroundColor(.secondary)
                 } else {
-                    VStack(spacing: 36) {
+                    VStack(spacing: 14) {
                         ForEach(visibleWeekends) { weekend in
                             let key = CalendarHelper.formatKey(weekend.saturday)
                             WeekendRowView(
@@ -574,11 +761,11 @@ struct MonthDisplayView: View {
 
     @ViewBuilder
     private func historicalPlansCard(for option: MonthOption) -> some View {
-        CardContainer {
+        plannerMonthContainer {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text(option.title)
-                        .font(.headline)
+                        .font(.subheadline.weight(.medium))
                     Spacer()
                     Text(option.subtitle)
                         .font(.caption)
@@ -604,6 +791,13 @@ struct MonthDisplayView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func plannerMonthContainer<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var pastEventEntries: [PastEventEntry] {
@@ -683,8 +877,8 @@ struct PastEventRowView: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Text(entry.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(.primary)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("PAST")
                         .font(.caption2.weight(.bold))
@@ -722,7 +916,7 @@ struct PastEventRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.cardStroke, lineWidth: 1)
+                    .stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -741,62 +935,73 @@ struct WeekendRowView: View {
 
     var body: some View {
         let weekendKey = CalendarHelper.formatKey(weekend.saturday)
-        HStack(alignment: .top, spacing: 0) {
-            accentIndicator
-
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .center) {
-                        Text(weekend.label)
-                            .font(.headline)
-                        Spacer(minLength: 8)
-                        statusPill
-                    }
+        let hasWeekendNote = state.hasWeekendNote(weekendKey: weekendKey)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 8) {
+                statusIndicator
+                Text(weekend.label)
+                    .font(.body.weight(.medium))
+                if hasWeekendNote {
+                    Image(systemName: "note.text")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(6)
+                        .background(AppSurfaceStyle.settingsChipBackground)
+                        .clipShape(Circle())
+                        .accessibilityLabel("Weekend note available")
                 }
-
-                quickAddChips(weekendKey: weekendKey)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    DayColumnView(
-                        day: .sat,
-                        events: eventsForDay(.sat),
-                        status: status,
-                        onEdit: { eventToEdit = $0 },
-                        onMove: { eventToEdit = $0 },
-                        onDuplicate: duplicateEvent,
-                        onComplete: { event in Task { _ = await state.markEventCompleted(event.id) } },
-                        onCancel: { event in Task { _ = await state.markEventCancelled(event.id) } },
-                        onReopen: { event in Task { _ = await state.reopenEvent(event.id) } },
-                        onSaveTemplate: { state.saveTemplate(from: $0) },
-                        onRemove: { eventToRemove = $0 },
-                        syncStateForEvent: { event in state.syncState(for: event.id) }
-                    )
-                    DayColumnView(
-                        day: .sun,
-                        events: eventsForDay(.sun),
-                        status: status,
-                        onEdit: { eventToEdit = $0 },
-                        onMove: { eventToEdit = $0 },
-                        onDuplicate: duplicateEvent,
-                        onComplete: { event in Task { _ = await state.markEventCompleted(event.id) } },
-                        onCancel: { event in Task { _ = await state.markEventCancelled(event.id) } },
-                        onReopen: { event in Task { _ = await state.reopenEvent(event.id) } },
-                        onSaveTemplate: { state.saveTemplate(from: $0) },
-                        onRemove: { eventToRemove = $0 },
-                        syncStateForEvent: { event in state.syncState(for: event.id) }
-                    )
-                }
+                Spacer(minLength: 8)
+                statusPill
             }
-            .padding(.leading, 12)
-            .padding(.vertical, 8)
-            .padding(.trailing, 10)
+
+            if hasQuickAddChips {
+                quickAddChips(weekendKey: weekendKey)
+            }
+
+            Divider()
+                .overlay(AppSurfaceStyle.settingsSeparator)
+
+            DayColumnView(
+                day: .sat,
+                events: eventsForDay(.sat),
+                status: status,
+                onEdit: { eventToEdit = $0 },
+                onMove: { eventToEdit = $0 },
+                onDuplicate: duplicateEvent,
+                onComplete: { event in Task { _ = await state.markEventCompleted(event.id) } },
+                onCancel: { event in Task { _ = await state.markEventCancelled(event.id) } },
+                onReopen: { event in Task { _ = await state.reopenEvent(event.id) } },
+                onSaveTemplate: { state.saveTemplate(from: $0) },
+                onRemove: { eventToRemove = $0 },
+                syncStateForEvent: { event in state.syncState(for: event.id) }
+            )
+
+            Divider()
+                .overlay(AppSurfaceStyle.settingsSeparator)
+
+            DayColumnView(
+                day: .sun,
+                events: eventsForDay(.sun),
+                status: status,
+                onEdit: { eventToEdit = $0 },
+                onMove: { eventToEdit = $0 },
+                onDuplicate: duplicateEvent,
+                onComplete: { event in Task { _ = await state.markEventCompleted(event.id) } },
+                onCancel: { event in Task { _ = await state.markEventCancelled(event.id) } },
+                onReopen: { event in Task { _ = await state.reopenEvent(event.id) } },
+                onSaveTemplate: { state.saveTemplate(from: $0) },
+                onRemove: { eventToRemove = $0 },
+                syncStateForEvent: { event in state.syncState(for: event.id) }
+            )
         }
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            rowBorder
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(14)
+        .background(AppSurfaceStyle.settingsCardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
+                .stroke(AppSurfaceStyle.settingsSeparator, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous))
         .onTapGesture {
             onTap()
         }
@@ -820,25 +1025,18 @@ struct WeekendRowView: View {
     }
 
     @ViewBuilder
-    private var accentIndicator: some View {
+    private var statusIndicator: some View {
         if status.type == "protected" {
-            ProtectedStripeBar(width: 5)
+            ProtectedStripeDot(size: 10)
         } else {
-            Rectangle()
+            Circle()
                 .fill(accentColor)
-                .frame(width: 4)
+                .frame(width: 10, height: 10)
         }
     }
 
-    @ViewBuilder
-    private var rowBorder: some View {
-        if status.type == "protected" {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.protectedStripeGradient, lineWidth: 1)
-        } else {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(borderColor, lineWidth: 1)
-        }
+    private var hasQuickAddChips: Bool {
+        !state.topQuickAddChips(limit: 4).isEmpty
     }
 
     private func eventsForDay(_ day: WeekendDay) -> [WeekendEvent] {
@@ -849,12 +1047,9 @@ struct WeekendRowView: View {
         switch status.type {
         case "travel": return .travelCoral
         case "plan": return .planBlue
+        case "protected": return .orange
         default: return .freeGreen
         }
-    }
-
-    private var borderColor: Color {
-        accentColor.opacity(0.4)
     }
 
     private func duplicateEvent(_ event: WeekendEvent) {
@@ -878,16 +1073,16 @@ struct WeekendRowView: View {
                                 Image(systemName: chip.type == PlanType.travel.rawValue ? "airplane" : "plus")
                                     .font(.caption2.weight(.bold))
                                 Text(chip.title)
-                                    .font(.caption.weight(.semibold))
+                                    .font(.caption.weight(.medium))
                                     .lineLimit(1)
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(Color.dayItemBackground)
+                            .background(AppSurfaceStyle.settingsChipBackground)
                             .clipShape(Capsule())
                             .overlay(
                                 Capsule()
-                                    .stroke(Color.dayCardStroke, lineWidth: 1)
+                                    .stroke(AppSurfaceStyle.settingsSeparator, lineWidth: 1)
                             )
                         }
                         .buttonStyle(.plain)
@@ -956,50 +1151,53 @@ struct DayColumnView: View {
     var syncStateForEvent: (WeekendEvent) -> SyncState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(day.label)
-                .font(.caption.weight(.semibold))
-                .textCase(.uppercase)
-                .tracking(1)
-                .foregroundColor(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(day.label)
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
+                    .tracking(1)
+                    .foregroundColor(.secondary)
+                Spacer(minLength: 8)
+                if !events.isEmpty {
+                    Text("\(events.count) plan\(events.count == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
 
             if events.isEmpty {
                 Text(status.type == "protected" ? "Protected" : "No plans yet")
-                    .font(.callout)
+                    .font(.footnote.weight(.medium))
+                    .italic()
                     .foregroundColor(.secondary)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.dayItemBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(Color.dayCardStroke, lineWidth: 1)
-                    )
+                    .padding(.vertical, 4)
             } else {
-                ForEach(events) { event in
-                    TimelineItemView(
-                        event: event,
-                        syncState: syncStateForEvent(event),
-                        onComplete: { onComplete(event) },
-                        onCancel: { onCancel(event) },
-                        onReopen: { onReopen(event) },
-                        onEdit: { onEdit(event) },
-                        onMove: { onMove(event) },
-                        onDuplicate: { onDuplicate(event) },
-                        onSaveTemplate: { onSaveTemplate(event) },
-                        onRemove: { onRemove(event) }
-                    )
+                VStack(spacing: 0) {
+                    ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
+                        TimelineItemView(
+                            event: event,
+                            syncState: syncStateForEvent(event),
+                            onComplete: { onComplete(event) },
+                            onCancel: { onCancel(event) },
+                            onReopen: { onReopen(event) },
+                            onEdit: { onEdit(event) },
+                            onMove: { onMove(event) },
+                            onDuplicate: { onDuplicate(event) },
+                            onSaveTemplate: { onSaveTemplate(event) },
+                            onRemove: { onRemove(event) }
+                        )
+
+                        if index < events.count - 1 {
+                            Divider()
+                                .overlay(AppSurfaceStyle.settingsSeparator)
+                                .padding(.leading, 18)
+                        }
+                    }
                 }
             }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.dayCardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.dayCardStroke, lineWidth: 1)
-        )
     }
 }
 
@@ -1027,81 +1225,80 @@ struct TimelineItemView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Text(event.title)
-                    .font(.callout.weight(.semibold))
+                    .font(.callout.weight(.medium))
                     .strikethrough(event.lifecycleStatus == .cancelled)
 
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     Text(lifecycleLabel)
                         .font(.caption2.weight(.semibold))
                         .foregroundColor(lifecycleColor)
-                    Text("•")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text(syncLabel)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundColor(syncColor)
                 }
             }
 
             Spacer()
-            Menu {
-                if event.lifecycleStatus == .planned {
+            HStack(spacing: 8) {
+                Image(systemName: syncIcon)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(syncColor)
+                    .frame(width: 22, height: 22)
+                    .background(syncColor.opacity(0.14))
+                    .clipShape(Circle())
+                    .accessibilityLabel(syncLabel)
+
+                Menu {
+                    if event.lifecycleStatus == .planned {
+                        Button {
+                            onComplete()
+                        } label: {
+                            Label("Complete", systemImage: "checkmark.circle")
+                        }
+                        Button {
+                            onCancel()
+                        } label: {
+                            Label("Cancel", systemImage: "xmark.circle")
+                        }
+                    } else {
+                        Button {
+                            onReopen()
+                        } label: {
+                            Label("Reopen", systemImage: "arrow.counterclockwise")
+                        }
+                    }
+                    Divider()
                     Button {
-                        onComplete()
+                        onEdit()
                     } label: {
-                        Label("Complete", systemImage: "checkmark.circle")
+                        Label("Edit", systemImage: "pencil")
                     }
                     Button {
-                        onCancel()
+                        onMove()
                     } label: {
-                        Label("Cancel", systemImage: "xmark.circle")
+                        Label("Move to another weekend", systemImage: "arrowshape.turn.up.right")
                     }
-                } else {
                     Button {
-                        onReopen()
+                        onDuplicate()
                     } label: {
-                        Label("Reopen", systemImage: "arrow.counterclockwise")
+                        Label("Duplicate to next weekend", systemImage: "plus.square.on.square")
                     }
-                }
-                Divider()
-                Button {
-                    onEdit()
+                    Button {
+                        onSaveTemplate()
+                    } label: {
+                        Label("Save as template", systemImage: "bookmark")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        onRemove()
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
                 } label: {
-                    Label("Edit", systemImage: "pencil")
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundColor(.secondary)
                 }
-                Button {
-                    onMove()
-                } label: {
-                    Label("Move to another weekend", systemImage: "arrowshape.turn.up.right")
-                }
-                Button {
-                    onDuplicate()
-                } label: {
-                    Label("Duplicate to next weekend", systemImage: "plus.square.on.square")
-                }
-                Button {
-                    onSaveTemplate()
-                } label: {
-                    Label("Save as template", systemImage: "bookmark")
-                }
-                Divider()
-                Button(role: .destructive) {
-                    onRemove()
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .foregroundColor(.secondary)
             }
         }
-        .padding(10)
-        .background(Color.dayItemBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.dayCardStroke, lineWidth: 1)
-        )
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 
     private func formatTime(_ value: String) -> String {
@@ -1119,7 +1316,7 @@ struct TimelineItemView: View {
 
     private var lifecycleLabel: String {
         switch event.lifecycleStatus {
-        case .planned: return "Planned"
+        case .planned: return "Upcoming"
         case .completed: return "Completed"
         case .cancelled: return "Cancelled"
         }
@@ -1138,6 +1335,14 @@ struct TimelineItemView: View {
         case .pending: return "Pending"
         case .retrying: return "Retrying"
         case .synced: return "Synced"
+        }
+    }
+
+    private var syncIcon: String {
+        switch syncState {
+        case .pending: return "icloud.and.arrow.up"
+        case .retrying: return "arrow.clockwise.circle.fill"
+        case .synced: return "checkmark.circle.fill"
         }
     }
 
@@ -1163,6 +1368,8 @@ struct WeekendDetailsView: View {
     @State private var showSaveWeekendTemplatePrompt = false
     @State private var weekendTemplateName = ""
     @State private var carryForwardResultMessage: String?
+    @State private var weekendNoteDraft = ""
+    @State private var savedWeekendNoteDraft = ""
 
     var body: some View {
         let saturday = CalendarHelper.parseKey(weekendKey) ?? Date()
@@ -1173,6 +1380,45 @@ struct WeekendDetailsView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(label)
                 .font(.title3.weight(.semibold))
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 8) {
+                    Label("Weekend note", systemImage: "note.text")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 8)
+                    Button {
+                        guard hasUnsavedWeekendNoteChanges else { return }
+                        state.setWeekendNote(weekendKey: weekendKey, note: weekendNoteDraft)
+                        savedWeekendNoteDraft = weekendNoteDraft
+                    } label: {
+                        Text(hasUnsavedWeekendNoteChanges ? "Save changes" : "Saved")
+                    }
+                    .buttonStyle(
+                        PillButtonStyle(
+                            fill: hasUnsavedWeekendNoteChanges ? AppSurfaceStyle.primaryButtonFill : Color.green.opacity(0.18),
+                            foreground: hasUnsavedWeekendNoteChanges ? AppSurfaceStyle.primaryButtonForeground : Color.green
+                        )
+                    )
+                }
+
+                TextEditor(text: $weekendNoteDraft)
+                    .font(.callout)
+                    .frame(minHeight: 92, maxHeight: 130)
+                    .padding(8)
+                    .background(AppSurfaceStyle.dayItemFill)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(AppSurfaceStyle.dayStroke, lineWidth: 1)
+                    )
+            }
+            .padding(12)
+            .background(AppSurfaceStyle.dayCardFill)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(AppSurfaceStyle.dayStroke, lineWidth: 1)
+            )
 
             VStack(alignment: .leading, spacing: 10) {
                 DayDetailColumn(
@@ -1244,13 +1490,18 @@ struct WeekendDetailsView: View {
                     dismiss()
                 }
             }
-            .buttonStyle(PillButtonStyle(fill: .black, foreground: .white))
+            .buttonStyle(
+                PillButtonStyle(
+                    fill: AppSurfaceStyle.primaryButtonFill,
+                    foreground: AppSurfaceStyle.primaryButtonForeground
+                )
+            )
 
             Button("Save weekend as template") {
                 weekendTemplateName = label
                 showSaveWeekendTemplatePrompt = true
             }
-            .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
+            .buttonStyle(OutlinePillButtonStyle(stroke: AppSurfaceStyle.cardStroke, foreground: .primary))
 
             if let nextWeekendKey = CalendarHelper.nextWeekendKey(after: weekendKey) {
                 Button("Move incomplete plans to next weekend") {
@@ -1264,11 +1515,16 @@ struct WeekendDetailsView: View {
                             : "\(count) plan\(count == 1 ? "" : "s") moved to next weekend."
                     }
                 }
-                .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
+                .buttonStyle(OutlinePillButtonStyle(stroke: AppSurfaceStyle.cardStroke, foreground: .primary))
             }
         }
         .padding(20)
         .presentationDetents([.medium, .large])
+        .onAppear {
+            let storedNote = state.weekendNote(for: weekendKey)
+            weekendNoteDraft = storedNote
+            savedWeekendNoteDraft = storedNote
+        }
         .confirmationDialog(
             "This weekend already has plans",
             isPresented: $showProtectionPrompt,
@@ -1349,6 +1605,14 @@ struct WeekendDetailsView: View {
             _ = await state.duplicateEvent(eventId: event.id, toWeekendKey: targetWeekendKey)
         }
     }
+
+    private var hasUnsavedWeekendNoteChanges: Bool {
+        normalizedWeekendNote(weekendNoteDraft) != normalizedWeekendNote(savedWeekendNoteDraft)
+    }
+
+    private func normalizedWeekendNote(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct DayDetailColumn: View {
@@ -1375,15 +1639,16 @@ struct DayDetailColumn: View {
 
             if events.isEmpty {
                 Text(isProtected ? "Protected" : "No plans yet")
-                    .font(.callout)
+                    .font(.footnote.weight(.medium))
+                    .italic()
                     .foregroundColor(.secondary)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.dayItemBackground)
+                    .background(AppSurfaceStyle.dayItemFill)
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(Color.dayCardStroke, lineWidth: 1)
+                            .stroke(AppSurfaceStyle.dayStroke, lineWidth: 1)
                     )
             } else {
                 ForEach(events) { event in
@@ -1404,11 +1669,11 @@ struct DayDetailColumn: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.dayCardBackground)
+        .background(AppSurfaceStyle.dayCardFill)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.dayCardStroke, lineWidth: 1)
+                .stroke(AppSurfaceStyle.dayStroke, lineWidth: 1)
         )
     }
 }
@@ -1437,6 +1702,7 @@ struct AddPlanView: View {
     @State private var showTemplateSavePrompt = false
     @State private var templateName = ""
     @State private var hasInitialized = false
+    @State private var eventDescription = ""
 
     init(weekendKey: String?, bypassProtection: Bool, editingEvent: WeekendEvent? = nil) {
         self.weekendKey = weekendKey
@@ -1497,6 +1763,14 @@ struct AddPlanView: View {
 
                 Section(header: Text("Title")) {
                     TextField("Surf trip, wedding, retreat", text: $title)
+                }
+
+                Section(
+                    header: Text("Description (optional)"),
+                    footer: Text("Shown only when this specific plan is opened.")
+                ) {
+                    TextEditor(text: $eventDescription)
+                        .frame(minHeight: 80)
                 }
 
                 Section(header: Text("Type")) {
@@ -1671,6 +1945,7 @@ struct AddPlanView: View {
         if let editingEvent {
             title = editingEvent.title
             planType = editingEvent.planType
+            eventDescription = state.eventDescription(for: editingEvent.id)
             if let editDate = Self.defaultWeekendDate(from: editingEvent.weekendKey) {
                 date = editDate
             }
@@ -1829,9 +2104,14 @@ struct AddPlanView: View {
                 payload,
                 exportToCalendar: exportToCalendar
             )
+            if success {
+                state.setEventDescription(for: editingEvent.id, description: eventDescription)
+            }
         } else {
             guard let userId = state.session?.user.id.uuidString.lowercased() else { return }
+            let newEventId = UUID().uuidString
             let payload = NewWeekendEvent(
+                id: newEventId,
                 title: title,
                 type: planType.rawValue,
                 weekendKey: weekendKey,
@@ -1841,6 +2121,9 @@ struct AddPlanView: View {
                 userId: userId
             )
             success = await state.addEvent(payload, exportToCalendar: exportToCalendar)
+            if success {
+                state.setEventDescription(for: newEventId, description: eventDescription)
+            }
         }
 
         if success {
@@ -1935,13 +2218,13 @@ struct CalendarInviteQRSheet: View {
                     .frame(width: 240, height: 240)
                     .padding(10)
                     .background(Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.cardStroke, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
+                            .stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
                     )
             } else {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
                     .fill(Color.secondary.opacity(0.1))
                     .frame(width: 240, height: 240)
                     .overlay(
@@ -1957,11 +2240,11 @@ struct CalendarInviteQRSheet: View {
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.dayCardBackground)
+                        .fill(AppSurfaceStyle.dayCardFill)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.dayCardStroke, lineWidth: 1)
+                        .stroke(AppSurfaceStyle.dayStroke, lineWidth: 1)
                 )
 
             Text("Ask your collaborator to scan this QR code, then paste the code into Join shared calendar.")
@@ -1976,13 +2259,18 @@ struct CalendarInviteQRSheet: View {
                 Label("Copy invite code", systemImage: "doc.on.doc")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
+            .buttonStyle(OutlinePillButtonStyle(stroke: AppSurfaceStyle.cardStroke, foreground: .primary))
             .padding(.horizontal, 20)
 
             Button("Done") {
                 dismiss()
             }
-            .buttonStyle(PillButtonStyle(fill: .black.opacity(0.9), foreground: .white))
+            .buttonStyle(
+                PillButtonStyle(
+                    fill: AppSurfaceStyle.primaryButtonFill,
+                    foreground: AppSurfaceStyle.primaryButtonForeground
+                )
+            )
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
         }
@@ -2011,7 +2299,7 @@ struct AuthSplashView: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.15).ignoresSafeArea()
+            AppSurfaceStyle.modalScrim.ignoresSafeArea()
             CardContainer {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("WEEKEND PLANNER")
@@ -2045,12 +2333,17 @@ struct AuthSplashView: View {
                         Button("Sign in") {
                             Task { await state.signIn(email: email, password: password) }
                         }
-                        .buttonStyle(OutlinePillButtonStyle(stroke: .cardStroke, foreground: .primary))
+                        .buttonStyle(OutlinePillButtonStyle(stroke: AppSurfaceStyle.cardStroke, foreground: .primary))
 
                         Button("Create account") {
                             Task { await state.signUp(email: email, password: password) }
                         }
-                        .buttonStyle(PillButtonStyle(fill: .black.opacity(0.9), foreground: .white))
+                        .buttonStyle(
+                            PillButtonStyle(
+                                fill: AppSurfaceStyle.primaryButtonFill,
+                                foreground: AppSurfaceStyle.primaryButtonForeground
+                            )
+                        )
                     }
 
                     if let message = state.authMessage {

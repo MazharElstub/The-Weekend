@@ -2,6 +2,7 @@ import Foundation
 import Supabase
 import UserNotifications
 import EventKit
+import SwiftUI
 
 enum PlanType: String, Codable, CaseIterable {
     case plan
@@ -37,6 +38,28 @@ enum WeekendDay: String, Codable, CaseIterable {
 enum ProtectionMode: String {
     case warn
     case block
+}
+
+enum AppTheme: String, CaseIterable {
+    case system
+    case light
+    case dark
+
+    var label: String {
+        switch self {
+        case .system: return "System"
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+
+    var preferredColorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
 }
 
 enum WeekendEventStatus: String, Codable, CaseIterable {
@@ -828,8 +851,9 @@ final class AppState: ObservableObject {
     @Published var isLoading = false
     @Published var authMessage: String?
     @Published var showAuthSplash = true
-    @Published var useDarkMode = false
+    @Published var appTheme: AppTheme = .system
     @Published var protectionMode: ProtectionMode = .warn
+    @Published var countdownTimeZoneIdentifier: String?
     @Published var calendars: [PlannerCalendar] = []
     @Published var selectedCalendarId: String?
     @Published var notificationPermissionState: NotificationPermissionState = .notDetermined
@@ -842,6 +866,8 @@ final class AppState: ObservableObject {
     @Published var pendingOperations: [PendingSyncOperation] = []
     @Published var auditEntries: [AuditEntry] = []
     @Published var monthlyGoals: [MonthlyGoal] = []
+    @Published var weekendNotes: [String: String] = [:]
+    @Published var eventDescriptions: [String: String] = [:]
     @Published var isSyncing = false
     @Published var pendingWeekendSelection: String?
     @Published var pendingAddPlanWeekendKey: String?
@@ -871,6 +897,8 @@ final class AppState: ObservableObject {
         static let syncQueue = "sync_queue_cache.json"
         static let audit = "audit_cache.json"
         static let monthlyGoals = "monthly_goals_cache.json"
+        static let weekendNotes = "weekend_notes_cache.json"
+        static let eventDescriptions = "event_descriptions_cache.json"
     }
 
     init(
@@ -896,7 +924,7 @@ final class AppState: ObservableObject {
         self.syncEngine = syncEngine
         self.auditService = auditService
         self.goalService = goalService
-        self.useDarkMode = UserDefaults.standard.bool(forKey: "weekend-theme-dark")
+        self.appTheme = Self.loadAppTheme()
         self.notificationPreferences = NotificationPreferences.load()
         self.calendars = localCacheStore.load([PlannerCalendar].self, fileName: CacheFile.calendars, fallback: [])
         self.selectedCalendarId = localCacheStore.load(String?.self, fileName: CacheFile.selectedCalendarId, fallback: nil)
@@ -908,11 +936,19 @@ final class AppState: ObservableObject {
         self.syncStates = localCacheStore.load([String: SyncState].self, fileName: CacheFile.syncStates, fallback: [:])
         self.pendingOperations = localCacheStore.load([PendingSyncOperation].self, fileName: CacheFile.syncQueue, fallback: [])
         self.monthlyGoals = localCacheStore.load([MonthlyGoal].self, fileName: CacheFile.monthlyGoals, fallback: [])
+        self.weekendNotes = localCacheStore.load([String: String].self, fileName: CacheFile.weekendNotes, fallback: [:])
+        self.eventDescriptions = localCacheStore.load([String: String].self, fileName: CacheFile.eventDescriptions, fallback: [:])
         let cachedAudit = localCacheStore.load([AuditEntry].self, fileName: CacheFile.audit, fallback: [])
         self.auditEntries = auditService.trim(entries: cachedAudit)
         if let raw = UserDefaults.standard.string(forKey: "weekend-protection-mode"),
            let mode = ProtectionMode(rawValue: raw) {
             self.protectionMode = mode
+        }
+        if let timeZoneIdentifier = UserDefaults.standard.string(forKey: "weekend-countdown-timezone-id"),
+           TimeZone(identifier: timeZoneIdentifier) != nil {
+            self.countdownTimeZoneIdentifier = timeZoneIdentifier
+        } else {
+            self.countdownTimeZoneIdentifier = nil
         }
         self.notificationService.setRouteHandler { [weak self] routeAction in
             Task { @MainActor in
@@ -990,6 +1026,8 @@ final class AppState: ObservableObject {
         events = []
         protections = []
         monthlyGoals = []
+        weekendNotes = [:]
+        eventDescriptions = [:]
         pendingOperations = []
         syncStates = [:]
         auditEntries = []
@@ -1003,6 +1041,8 @@ final class AppState: ObservableObject {
         localCacheStore.remove(fileName: CacheFile.syncStates)
         localCacheStore.remove(fileName: CacheFile.audit)
         localCacheStore.remove(fileName: CacheFile.monthlyGoals)
+        localCacheStore.remove(fileName: CacheFile.weekendNotes)
+        localCacheStore.remove(fileName: CacheFile.eventDescriptions)
         await refreshNotificationPermissionState()
         await rescheduleNotifications()
     }
@@ -1308,6 +1348,7 @@ final class AppState: ObservableObject {
         guard session != nil else { return }
         guard let selectedCalendarId else {
             events = []
+            pruneEventDescriptionsToActiveEvents()
             persistCaches()
             return
         }
@@ -1324,6 +1365,7 @@ final class AppState: ObservableObject {
                 return event.withCalendarEventIdentifier(localIdentifiers.first ?? event.calendarEventIdentifier)
             }.filter { !$0.isSyncDeleted }
             self.events = sortedEvents(normalized)
+            pruneEventDescriptionsToActiveEvents()
             calendarExportStore.pruneMappings(validEventIDs: Set(normalized.map(\.id)))
             persistCaches()
         } catch {
@@ -1499,10 +1541,12 @@ final class AppState: ObservableObject {
     func duplicateEvent(eventId: String, toWeekendKey: String, days: [WeekendDay]? = nil) async -> Bool {
         guard let event = events.first(where: { $0.id == eventId }),
               let session = session else { return false }
+        let sourceDescription = eventDescriptions[event.id]
         let daySelection = (days?.isEmpty == false ? days : event.dayValues) ?? event.dayValues
         let duplicateDays = daySelection.sorted { $0.rawValue < $1.rawValue }
+        let duplicateEventId = UUID().uuidString
         let payload = NewWeekendEvent(
-            id: UUID().uuidString,
+            id: duplicateEventId,
             title: event.title,
             type: event.type,
             calendarId: event.calendarId ?? selectedCalendarId,
@@ -1512,12 +1556,17 @@ final class AppState: ObservableObject {
             endTime: event.endTime,
             userId: normalizedUserId(for: session)
         )
-        return await addEvent(payload, exportToCalendar: isEventExportedToCalendar(eventId: event.id))
+        let added = await addEvent(payload, exportToCalendar: isEventExportedToCalendar(eventId: event.id))
+        if added, let sourceDescription {
+            setEventDescription(for: duplicateEventId, description: sourceDescription)
+        }
+        return added
     }
 
     func removeEvent(_ event: WeekendEvent) async {
         guard events.contains(where: { $0.id == event.id }) else { return }
         events.removeAll { $0.id == event.id }
+        eventDescriptions.removeValue(forKey: event.id)
         removeCalendarExports(forEventID: event.id)
         recordAudit(
             action: "event.remove",
@@ -1623,6 +1672,39 @@ final class AppState: ObservableObject {
             }
     }
 
+    func weekendNote(for weekendKey: String) -> String {
+        weekendNotes[weekendNoteStorageKey(for: weekendKey)] ?? ""
+    }
+
+    func hasWeekendNote(weekendKey: String) -> Bool {
+        !weekendNote(for: weekendKey).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func setWeekendNote(weekendKey: String, note: String) {
+        let key = weekendNoteStorageKey(for: weekendKey)
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            weekendNotes.removeValue(forKey: key)
+        } else {
+            weekendNotes[key] = trimmed
+        }
+        persistCaches()
+    }
+
+    func eventDescription(for eventId: String) -> String {
+        eventDescriptions[eventId] ?? ""
+    }
+
+    func setEventDescription(for eventId: String, description: String) {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            eventDescriptions.removeValue(forKey: eventId)
+        } else {
+            eventDescriptions[eventId] = trimmed
+        }
+        persistCaches()
+    }
+
     func status(for weekendKey: String) -> WeekendStatus {
         let weekendEvents = events
             .filter { $0.weekendKey == weekendKey && $0.lifecycleStatus == .planned }
@@ -1642,14 +1724,51 @@ final class AppState: ObservableObject {
         return WeekendStatus(type: "free", label: "Free")
     }
 
-    func setTheme(_ isDark: Bool) {
-        useDarkMode = isDark
-        UserDefaults.standard.set(isDark, forKey: "weekend-theme-dark")
+    func setTheme(_ theme: AppTheme) {
+        appTheme = theme
+        UserDefaults.standard.set(theme.rawValue, forKey: "weekend-theme")
+        switch theme {
+        case .system:
+            UserDefaults.standard.removeObject(forKey: "weekend-theme-dark")
+        case .light:
+            UserDefaults.standard.set(false, forKey: "weekend-theme-dark")
+        case .dark:
+            UserDefaults.standard.set(true, forKey: "weekend-theme-dark")
+        }
     }
 
     func setProtectionMode(_ mode: ProtectionMode) {
         protectionMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: "weekend-protection-mode")
+    }
+
+    var countdownTimeZone: TimeZone {
+        if let identifier = countdownTimeZoneIdentifier,
+           let timeZone = TimeZone(identifier: identifier) {
+            return timeZone
+        }
+        return .autoupdatingCurrent
+    }
+
+    var countdownTimeZoneDisplayName: String {
+        if let identifier = countdownTimeZoneIdentifier,
+           let timeZone = TimeZone(identifier: identifier) {
+            return "\(localizedTimeZoneName(timeZone)) • \(gmtOffsetLabel(for: timeZone))"
+        }
+        let systemTimeZone = TimeZone.autoupdatingCurrent
+        return "System (\(localizedTimeZoneName(systemTimeZone)))"
+    }
+
+    func setCountdownTimeZoneIdentifier(_ identifier: String?) {
+        let trimmed = identifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            countdownTimeZoneIdentifier = nil
+            UserDefaults.standard.removeObject(forKey: "weekend-countdown-timezone-id")
+            return
+        }
+        guard TimeZone(identifier: trimmed) != nil else { return }
+        countdownTimeZoneIdentifier = trimmed
+        UserDefaults.standard.set(trimmed, forKey: "weekend-countdown-timezone-id")
     }
 
     func saveTemplate(name: String, draft: PlanTemplateDraft) {
@@ -2288,6 +2407,40 @@ final class AppState: ObservableObject {
         persistCaches()
     }
 
+    private func weekendNoteStorageKey(for weekendKey: String) -> String {
+        "\(selectedCalendarId ?? "local")|\(weekendKey)"
+    }
+
+    private func pruneEventDescriptionsToActiveEvents() {
+        let activeEventIDs = Set(events.map(\.id))
+        eventDescriptions = eventDescriptions.filter { activeEventIDs.contains($0.key) }
+    }
+
+    private func localizedTimeZoneName(_ timeZone: TimeZone) -> String {
+        timeZone.localizedName(for: .generic, locale: .current)
+            ?? timeZone.identifier.replacingOccurrences(of: "_", with: " ")
+    }
+
+    private func gmtOffsetLabel(for timeZone: TimeZone) -> String {
+        let seconds = timeZone.secondsFromGMT()
+        let sign = seconds >= 0 ? "+" : "-"
+        let absolute = abs(seconds)
+        let hours = absolute / 3600
+        let minutes = (absolute % 3600) / 60
+        return String(format: "GMT%@%02d:%02d", sign, hours, minutes)
+    }
+
+    private static func loadAppTheme() -> AppTheme {
+        if let raw = UserDefaults.standard.string(forKey: "weekend-theme"),
+           let theme = AppTheme(rawValue: raw) {
+            return theme
+        }
+        if UserDefaults.standard.object(forKey: "weekend-theme-dark") != nil {
+            return UserDefaults.standard.bool(forKey: "weekend-theme-dark") ? .dark : .light
+        }
+        return .system
+    }
+
     private func persistCaches() {
         localCacheStore.save(calendars, fileName: CacheFile.calendars)
         localCacheStore.save(selectedCalendarId, fileName: CacheFile.selectedCalendarId)
@@ -2300,6 +2453,8 @@ final class AppState: ObservableObject {
         localCacheStore.save(pendingOperations, fileName: CacheFile.syncQueue)
         localCacheStore.save(auditEntries, fileName: CacheFile.audit)
         localCacheStore.save(monthlyGoals, fileName: CacheFile.monthlyGoals)
+        localCacheStore.save(weekendNotes, fileName: CacheFile.weekendNotes)
+        localCacheStore.save(eventDescriptions, fileName: CacheFile.eventDescriptions)
     }
 }
 

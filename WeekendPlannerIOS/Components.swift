@@ -72,14 +72,153 @@ extension Color {
     }
 }
 
+enum AppSurfaceStyle {
+    static let primaryCardCornerRadius: CGFloat = 20
+
+    static var settingsGroupBackground: Color {
+        Color(UIColor.systemGroupedBackground)
+    }
+
+    static var settingsCardBackground: Color {
+        Color(UIColor.secondarySystemGroupedBackground)
+    }
+
+    static var settingsChipBackground: Color {
+        Color(UIColor.tertiarySystemGroupedBackground)
+    }
+
+    static var settingsSeparator: Color {
+        Color(UIColor.separator).opacity(0.22)
+    }
+
+    static var cardFill: AnyShapeStyle {
+        if #available(iOS 26.0, *) {
+            return AnyShapeStyle(.thinMaterial)
+        }
+        return AnyShapeStyle(Color.cardBackground)
+    }
+
+    static var dayCardFill: AnyShapeStyle {
+        if #available(iOS 26.0, *) {
+            return AnyShapeStyle(.ultraThinMaterial)
+        }
+        return AnyShapeStyle(Color.dayCardBackground)
+    }
+
+    static var dayItemFill: AnyShapeStyle {
+        if #available(iOS 26.0, *) {
+            return AnyShapeStyle(.regularMaterial)
+        }
+        return AnyShapeStyle(Color.dayItemBackground)
+    }
+
+    static var fieldFill: AnyShapeStyle {
+        if #available(iOS 26.0, *) {
+            return AnyShapeStyle(.thinMaterial)
+        }
+        return AnyShapeStyle(Color.fieldBackground)
+    }
+
+    static var cardStroke: Color {
+        if #available(iOS 26.0, *) {
+            return Color.dynamic(
+                light: UIColor.black.withAlphaComponent(0.08),
+                dark: UIColor.white.withAlphaComponent(0.22)
+            )
+        }
+        return Color.cardStroke
+    }
+
+    static var dayStroke: Color {
+        if #available(iOS 26.0, *) {
+            return Color.dynamic(
+                light: UIColor.black.withAlphaComponent(0.07),
+                dark: UIColor.white.withAlphaComponent(0.18)
+            )
+        }
+        return Color.dayCardStroke
+    }
+
+    static var cardShadowColor: Color {
+        if #available(iOS 26.0, *) {
+            return Color.black.opacity(0.04)
+        }
+        return Color.black.opacity(0.08)
+    }
+
+    static var cardShadowRadius: CGFloat {
+        if #available(iOS 26.0, *) {
+            return 10
+        }
+        return 18
+    }
+
+    static var cardShadowYOffset: CGFloat {
+        if #available(iOS 26.0, *) {
+            return 5
+        }
+        return 12
+    }
+
+    static var fieldShadowColor: Color {
+        if #available(iOS 26.0, *) {
+            return Color.black.opacity(0.03)
+        }
+        return Color.black.opacity(0.08)
+    }
+
+    static var fieldShadowRadius: CGFloat {
+        if #available(iOS 26.0, *) {
+            return 6
+        }
+        return 10
+    }
+
+    static var fieldShadowYOffset: CGFloat {
+        if #available(iOS 26.0, *) {
+            return 3
+        }
+        return 6
+    }
+
+    static var primaryButtonFill: Color {
+        if #available(iOS 26.0, *) {
+            return Color.dynamic(
+                light: UIColor.systemGray5.withAlphaComponent(0.95),
+                dark: UIColor.systemGray4.withAlphaComponent(0.55)
+            )
+        }
+        return Color.black.opacity(0.9)
+    }
+
+    static var primaryButtonForeground: Color {
+        if #available(iOS 26.0, *) {
+            return .primary
+        }
+        return .white
+    }
+
+    static var modalScrim: Color {
+        if #available(iOS 26.0, *) {
+            return Color.black.opacity(0.08)
+        }
+        return Color.black.opacity(0.15)
+    }
+}
+
 struct AppGradientBackground: View {
     var body: some View {
-        LinearGradient(
-            colors: [Color.appBackgroundStart, Color.appBackgroundMid, Color.appBackgroundEnd],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+        if #available(iOS 26.0, *) {
+            Color(UIColor.systemGroupedBackground)
+                .ignoresSafeArea()
+        } else {
+            LinearGradient(
+                colors: [Color.appBackgroundStart, Color.appBackgroundMid, Color.appBackgroundEnd],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        }
     }
 }
 
@@ -136,7 +275,7 @@ struct ProtectedStripeDot: View {
             .frame(width: size, height: size)
             .overlay(
                 Circle()
-                    .stroke(Color.cardStroke, lineWidth: 1)
+                    .stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
             )
     }
 }
@@ -150,7 +289,7 @@ struct ProtectedStripeBar: View {
             .frame(width: width)
             .overlay(
                 RoundedRectangle(cornerRadius: width / 2, style: .continuous)
-                    .stroke(Color.cardStroke, lineWidth: 1)
+                    .stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
             )
     }
 }
@@ -181,14 +320,19 @@ struct CardContainer<Content: View>: View {
         content
             .padding(16)
             .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.cardBackground)
+                RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
+                    .fill(AppSurfaceStyle.cardFill)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.cardStroke, lineWidth: 1)
+                RoundedRectangle(cornerRadius: AppSurfaceStyle.primaryCardCornerRadius, style: .continuous)
+                    .stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.08), radius: 18, x: 0, y: 12)
+            .shadow(
+                color: AppSurfaceStyle.cardShadowColor,
+                radius: AppSurfaceStyle.cardShadowRadius,
+                x: 0,
+                y: AppSurfaceStyle.cardShadowYOffset
+            )
     }
 }
 
@@ -198,11 +342,16 @@ struct PillTextFieldStyle: TextFieldStyle {
             .padding(.vertical, 12)
             .padding(.horizontal, 16)
             .frame(height: 46)
-            .background(Color.fieldBackground)
+            .background(AppSurfaceStyle.fieldFill)
             .clipShape(Capsule())
             .overlay(
-                Capsule().stroke(Color.cardStroke.opacity(0.9), lineWidth: 1)
+                Capsule().stroke(AppSurfaceStyle.cardStroke.opacity(0.9), lineWidth: 1)
             )
-            .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 6)
+            .shadow(
+                color: AppSurfaceStyle.fieldShadowColor,
+                radius: AppSurfaceStyle.fieldShadowRadius,
+                x: 0,
+                y: AppSurfaceStyle.fieldShadowYOffset
+            )
     }
 }
