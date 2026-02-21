@@ -32,9 +32,17 @@ Examples:
 1. Merge completed work into `main`.
 2. Bump marketing version and build number.
 3. Update `CHANGELOG.md`.
-4. Archive and upload in Xcode.
-5. Create tag `vX.Y.Z` on the release commit.
-6. Push branch and tag.
+4. Run performance smoke checks and validate current thresholds in `docs/PERFORMANCE_BUDGETS.md`.
+5. Update `docs/PERFORMANCE_BASELINE.md` with latest before/after metrics for release candidates.
+6. Run the App Store compliance checklist in `docs/APP_STORE_COMPLIANCE_CHECKLIST.md`.
+7. Confirm Guideline 5.1.1(v): `Settings` -> `Account` -> `Delete account` is functional in the release build.
+8. Archive and upload in Xcode.
+9. Create tag `vX.Y.Z` on the release commit.
+10. Push branch and tag.
+
+## App Store Guardrail
+
+- Do not submit an App Store build unless required performance budgets pass in `docs/PERFORMANCE_BUDGETS.md`.
 
 ## Hotfix Workflow
 

@@ -1,25 +1,5 @@
 import Foundation
 
-struct MonthlyGoal: Identifiable, Codable, Hashable {
-    var id: String
-    var userId: String
-    var monthKey: String
-    var plannedTarget: Int
-    var completedTarget: Int
-    var createdAt: Date
-    var updatedAt: Date
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case userId = "user_id"
-        case monthKey = "month_key"
-        case plannedTarget = "planned_target"
-        case completedTarget = "completed_target"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-    }
-}
-
 struct StreakSnapshot: Codable, Hashable {
     let current: Int
     let best: Int
@@ -32,25 +12,13 @@ struct WeeklyReportSnapshot: Codable, Hashable {
     let lastWeekCompleted: Int
     let currentStreak: Int
     let bestStreak: Int
-    let goalMonthKey: String
-    let goalPlannedTarget: Int
-    let goalCompletedTarget: Int
-    let goalPlannedProgress: Int
-    let goalCompletedProgress: Int
 }
 
-final class GoalService {
+final class ReportService {
     private let calendar: Calendar
 
     init(calendar: Calendar = .current) {
         self.calendar = calendar
-    }
-
-    func monthKey(for date: Date) -> String {
-        let components = calendar.dateComponents([.year, .month], from: date)
-        let year = components.year ?? 0
-        let month = components.month ?? 1
-        return String(format: "%04d-%02d", year, month)
     }
 
     func streakSnapshot(events: [WeekendEvent], referenceDate: Date = Date()) -> StreakSnapshot {
@@ -106,7 +74,6 @@ final class GoalService {
 
     func weeklyReportSnapshot(
         events: [WeekendEvent],
-        goals: [MonthlyGoal],
         referenceDate: Date = Date()
     ) -> WeeklyReportSnapshot {
         let thisWeekInterval = weekInterval(containing: referenceDate)
@@ -134,18 +101,6 @@ final class GoalService {
         }.count
 
         let streak = streakSnapshot(events: events, referenceDate: referenceDate)
-        let monthKey = monthKey(for: referenceDate)
-        let goal = goals.first { $0.monthKey == monthKey }
-
-        let monthInterval = monthInterval(containing: referenceDate)
-        let monthCreated = events.filter { event in
-            guard let createdAt = event.createdAt ?? event.clientUpdatedAt else { return false }
-            return monthInterval.contains(createdAt)
-        }.count
-        let monthCompleted = events.filter { event in
-            guard let completedAt = event.completedAt else { return false }
-            return monthInterval.contains(completedAt)
-        }.count
 
         return WeeklyReportSnapshot(
             thisWeekCreated: thisWeekCreated,
@@ -153,12 +108,7 @@ final class GoalService {
             lastWeekCreated: lastWeekCreated,
             lastWeekCompleted: lastWeekCompleted,
             currentStreak: streak.current,
-            bestStreak: streak.best,
-            goalMonthKey: monthKey,
-            goalPlannedTarget: goal?.plannedTarget ?? 6,
-            goalCompletedTarget: goal?.completedTarget ?? 4,
-            goalPlannedProgress: monthCreated,
-            goalCompletedProgress: monthCompleted
+            bestStreak: streak.best
         )
     }
 
@@ -181,12 +131,6 @@ final class GoalService {
     private func weekInterval(containing date: Date) -> DateInterval {
         let start = calendar.dateInterval(of: .weekOfYear, for: date)?.start ?? calendar.startOfDay(for: date)
         let end = calendar.date(byAdding: .day, value: 7, to: start) ?? start
-        return DateInterval(start: start, end: end)
-    }
-
-    private func monthInterval(containing date: Date) -> DateInterval {
-        let start = calendar.dateInterval(of: .month, for: date)?.start ?? calendar.startOfDay(for: date)
-        let end = calendar.date(byAdding: .month, value: 1, to: start) ?? start
         return DateInterval(start: start, end: end)
     }
 }

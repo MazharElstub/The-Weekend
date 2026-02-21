@@ -14,12 +14,17 @@ struct TheWeekendApp: App {
                     await state.bootstrap()
                 }
                 .onChange(of: scenePhase) { _, newPhase in
-                    guard newPhase == .active else { return }
-                    Task {
-                        await state.refreshNotificationPermissionState()
-                        await state.refreshCalendarPermissionState()
-                        await state.rescheduleNotifications()
-                        await state.flushPendingOperations()
+                    switch newPhase {
+                    case .active:
+                        Task {
+                            await state.handleAppDidBecomeActive()
+                        }
+                    case .inactive, .background:
+                        Task { @MainActor in
+                            state.handleAppWillResignActive()
+                        }
+                    @unknown default:
+                        break
                     }
                 }
         }

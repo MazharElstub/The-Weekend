@@ -25,7 +25,9 @@ Use the helper script to bump both:
 1. Merge approved work into `main`.
 2. Bump version/build.
 3. Update `CHANGELOG.md`.
-4. Archive and upload from Xcode.
-5. Create and push Git tag (`vX.Y.Z`).
+4. Run performance smoke pass and confirm budgets in `docs/PERFORMANCE_BUDGETS.md`.
+5. Verify App Store compliance checklist, including 5.1.1(v) account deletion flow (`Settings` -> `Account` -> `Delete account`).
+6. Archive and upload from Xcode.
+7. Create and push Git tag (`vX.Y.Z`).
 
-See `CONTRIBUTING.md` for full workflow.
+See `CONTRIBUTING.md`, `docs/APP_STORE_COMPLIANCE_CHECKLIST.md`, `docs/PERFORMANCE_BUDGETS.md`, and `docs/PERFORMANCE_BASELINE.md` for full workflow.

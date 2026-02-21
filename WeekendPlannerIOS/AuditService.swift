@@ -1,12 +1,53 @@
 import Foundation
 
-enum AuditEntityType: String, Codable {
+enum AuditEntityType: Codable, Hashable {
     case event
     case protection
     case template
     case settings
-    case goal
     case sync
+    case unsupported
+
+    var rawValue: String {
+        switch self {
+        case .event:
+            return "event"
+        case .protection:
+            return "protection"
+        case .template:
+            return "template"
+        case .settings:
+            return "settings"
+        case .sync:
+            return "sync"
+        case .unsupported:
+            return "unsupported"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "event":
+            self = .event
+        case "protection":
+            self = .protection
+        case "template":
+            self = .template
+        case "settings":
+            self = .settings
+        case "sync":
+            self = .sync
+        default:
+            self = .unsupported
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 struct AuditEntry: Identifiable, Codable, Hashable {
