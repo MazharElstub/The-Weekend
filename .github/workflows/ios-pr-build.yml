@@ -27,3 +27,15 @@ jobs:
             -configuration Debug \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+      - name: Performance Smoke Tests
+        run: |
+          xcodebuild \
+            -project WeekendPlannerIOS.xcodeproj \
+            -scheme WeekendPlannerIOS \
+            -destination "platform=iOS Simulator,name=iPhone 16 Pro,OS=latest" \
+            -only-testing:WeekendPlannerIOSUITests/testLaunchPerformance \
+            -only-testing:WeekendPlannerIOSUITests/testResumePerformance \
+            -only-testing:WeekendPlannerIOSUITests/testCoreInteractionPerformanceSmoke \
+            CODE_SIGNING_ALLOWED=NO \
+            test

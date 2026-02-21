@@ -1,12 +1,47 @@
 import Foundation
 import Supabase
 
-enum SyncOperationType: String, Codable {
+enum SyncOperationType: Codable, Hashable {
     case upsertEvent
     case deleteEvent
     case setProtection
-    case upsertGoal
     case appendAudit
+    case unsupported
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "upsertEvent":
+            self = .upsertEvent
+        case "deleteEvent":
+            self = .deleteEvent
+        case "setProtection":
+            self = .setProtection
+        case "appendAudit":
+            self = .appendAudit
+        default:
+            self = .unsupported
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        let rawValue: String
+        switch self {
+        case .upsertEvent:
+            rawValue = "upsertEvent"
+        case .deleteEvent:
+            rawValue = "deleteEvent"
+        case .setProtection:
+            rawValue = "setProtection"
+        case .appendAudit:
+            rawValue = "appendAudit"
+        case .unsupported:
+            rawValue = "unsupported"
+        }
+        try container.encode(rawValue)
+    }
 }
 
 enum SyncState: String, Codable {
@@ -27,7 +62,6 @@ struct PendingSyncOperation: Identifiable, Codable, Hashable {
     var calendarId: String?
     var protectionWeekKey: String?
     var protectionEnabled: Bool?
-    var goal: MonthlyGoal?
     var auditEntry: AuditEntry?
 
     init(
@@ -41,7 +75,6 @@ struct PendingSyncOperation: Identifiable, Codable, Hashable {
         calendarId: String? = nil,
         protectionWeekKey: String? = nil,
         protectionEnabled: Bool? = nil,
-        goal: MonthlyGoal? = nil,
         auditEntry: AuditEntry? = nil
     ) {
         self.id = id
@@ -54,7 +87,6 @@ struct PendingSyncOperation: Identifiable, Codable, Hashable {
         self.calendarId = calendarId
         self.protectionWeekKey = protectionWeekKey
         self.protectionEnabled = protectionEnabled
-        self.goal = goal
         self.auditEntry = auditEntry
     }
 }
@@ -163,20 +195,6 @@ final class SyncEngine {
                 try await removeQuery.execute()
             }
 
-        case .upsertGoal:
-            guard let goal = operation.goal else { return }
-            let payload = MonthlyGoalPayload(goal: goal)
-            _ = try await supabase
-                .from("monthly_goals")
-                .delete()
-                .eq("user_id", value: userId)
-                .eq("month_key", value: goal.monthKey)
-                .execute()
-            try await supabase
-                .from("monthly_goals")
-                .insert(payload)
-                .execute()
-
         case .appendAudit:
             guard let entry = operation.auditEntry else { return }
             let payload = AuditPayload(entry: entry, userId: userId)
@@ -184,6 +202,9 @@ final class SyncEngine {
                 .from("event_audit_logs")
                 .insert(payload)
                 .execute()
+
+        case .unsupported:
+            return
         }
     }
 
@@ -336,36 +357,6 @@ private struct UpdateWeekendEventSyncPayload: Encodable {
         clientUpdatedAt = SyncDateFormatter.isoString(from: event.clientUpdatedAt ?? Date()) ?? SyncDateFormatter.isoString(from: Date()) ?? ""
         updatedAt = SyncDateFormatter.isoString(from: event.updatedAt ?? Date()) ?? SyncDateFormatter.isoString(from: Date()) ?? ""
         deletedAt = SyncDateFormatter.isoString(from: event.deletedAt)
-    }
-}
-
-private struct MonthlyGoalPayload: Encodable {
-    let id: String
-    let userId: String
-    let monthKey: String
-    let plannedTarget: Int
-    let completedTarget: Int
-    let createdAt: String
-    let updatedAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case userId = "user_id"
-        case monthKey = "month_key"
-        case plannedTarget = "planned_target"
-        case completedTarget = "completed_target"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-    }
-
-    init(goal: MonthlyGoal) {
-        id = goal.id
-        userId = goal.userId
-        monthKey = goal.monthKey
-        plannedTarget = goal.plannedTarget
-        completedTarget = goal.completedTarget
-        createdAt = SyncDateFormatter.isoString(from: goal.createdAt) ?? SyncDateFormatter.isoString(from: Date()) ?? ""
-        updatedAt = SyncDateFormatter.isoString(from: goal.updatedAt) ?? SyncDateFormatter.isoString(from: Date()) ?? ""
     }
 }
 

@@ -26,6 +26,7 @@ final class NotificationService: NSObject {
     private let actionAddPlanIdentifier = "weekend.action.add"
     private let actionSnoozeIdentifier = "weekend.action.snooze"
 
+    private let routeStateLock = NSLock()
     private var routeHandler: ((NotificationRouteAction) -> Void)?
     private var pendingRoutes: [NotificationRouteAction] = []
 
@@ -45,10 +46,19 @@ final class NotificationService: NSObject {
     }
 
     func setRouteHandler(_ handler: @escaping (NotificationRouteAction) -> Void) {
+        var buffered: [NotificationRouteAction] = []
+        routeStateLock.lock()
         routeHandler = handler
         if !pendingRoutes.isEmpty {
-            let buffered = pendingRoutes
+            buffered = pendingRoutes
             pendingRoutes.removeAll()
+        }
+        routeStateLock.unlock()
+
+        guard !buffered.isEmpty else { return }
+        // Flush buffered routes on the next main-queue turn to avoid re-entrant
+        // navigation updates while app state is still initializing.
+        DispatchQueue.main.async {
             buffered.forEach(handler)
         }
     }
@@ -74,11 +84,15 @@ final class NotificationService: NSObject {
         sessionIsActive: Bool,
         now: Date = Date()
     ) async {
-        await clearAppManagedNotifications()
-
-        guard sessionIsActive else { return }
+        guard sessionIsActive else {
+            await clearAppManagedNotifications()
+            return
+        }
         let permissionState = await authorizationStatus()
-        guard permissionState.canDeliverNotifications else { return }
+        guard permissionState.canDeliverNotifications else {
+            await clearAppManagedNotifications()
+            return
+        }
 
         var requests: [UNNotificationRequest] = []
         if let summary = weeklySummaryRequest(events: events, protections: protections, preferences: preferences, now: now) {
@@ -94,10 +108,7 @@ final class NotificationService: NSObject {
             requests.append(recap)
         }
         requests.append(contentsOf: eventReminderRequests(events: events, preferences: preferences, now: now))
-
-        for request in requests {
-            await addRequest(request)
-        }
+        await syncAppManagedNotifications(to: requests)
     }
 
     private func weeklySummaryRequest(
@@ -353,13 +364,8 @@ final class NotificationService: NSObject {
     }
 
     private func dateForWeekendDay(_ day: WeekendDay, saturday: Date) -> Date? {
-        switch day {
-        case .sat:
-            return calendar.startOfDay(for: saturday)
-        case .sun:
-            guard let sunday = calendar.date(byAdding: .day, value: 1, to: saturday) else { return nil }
-            return calendar.startOfDay(for: sunday)
-        }
+        let weekendKey = CalendarHelper.formatKey(saturday)
+        return CalendarHelper.dateForPlannerDay(day, weekendKey: weekendKey)
     }
 
     private func dateComponents(for date: Date) -> DateComponents {
@@ -393,29 +399,90 @@ final class NotificationService: NSObject {
     }
 
     private func clearAppManagedNotifications() async {
-        let pendingIDs = await appManagedPendingIdentifiers()
+        let pendingIDs = await appManagedPendingRequests().map(\.identifier)
         if !pendingIDs.isEmpty {
             center.removePendingNotificationRequests(withIdentifiers: pendingIDs)
         }
 
-        let deliveredIDs = await appManagedDeliveredIdentifiers()
+        let deliveredIDs = await appManagedDeliveredNotifications().map(\.request.identifier)
         if !deliveredIDs.isEmpty {
             center.removeDeliveredNotifications(withIdentifiers: deliveredIDs)
         }
     }
 
-    private func appManagedPendingIdentifiers() async -> [String] {
-        let requests = await pendingRequests()
-        return requests
-            .map(\.identifier)
-            .filter { $0.hasPrefix(appIdentifierPrefix) }
+    private func appManagedPendingRequests() async -> [UNNotificationRequest] {
+        await pendingRequests()
+            .filter { $0.identifier.hasPrefix(appIdentifierPrefix) }
     }
 
-    private func appManagedDeliveredIdentifiers() async -> [String] {
-        let notifications = await deliveredNotifications()
-        return notifications
-            .map(\.request.identifier)
-            .filter { $0.hasPrefix(appIdentifierPrefix) }
+    private func appManagedDeliveredNotifications() async -> [UNNotification] {
+        await deliveredNotifications()
+            .filter { $0.request.identifier.hasPrefix(appIdentifierPrefix) }
+    }
+
+    private func syncAppManagedNotifications(to desiredRequests: [UNNotificationRequest]) async {
+        let existingRequests = await appManagedPendingRequests()
+        let existingByID = Dictionary(uniqueKeysWithValues: existingRequests.map { ($0.identifier, $0) })
+        let desiredByID = Dictionary(uniqueKeysWithValues: desiredRequests.map { ($0.identifier, $0) })
+
+        let staleIDs = existingByID.keys.filter { desiredByID[$0] == nil }
+        if !staleIDs.isEmpty {
+            center.removePendingNotificationRequests(withIdentifiers: staleIDs)
+        }
+
+        for request in desiredRequests {
+            if let existing = existingByID[request.identifier],
+               requestSignature(existing) == requestSignature(request) {
+                continue
+            }
+            await addRequest(request)
+        }
+    }
+
+    private func requestSignature(_ request: UNNotificationRequest) -> Int {
+        var hasher = Hasher()
+        hasher.combine(request.identifier)
+        hasher.combine(request.content.title)
+        hasher.combine(request.content.subtitle)
+        hasher.combine(request.content.body)
+        hasher.combine(request.content.categoryIdentifier)
+        let userInfoPairs = request.content.userInfo
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+        for pair in userInfoPairs {
+            hasher.combine(pair)
+        }
+
+        if let trigger = request.trigger as? UNCalendarNotificationTrigger {
+            hasher.combine("calendar")
+            hasher.combine(trigger.repeats)
+            let components = trigger.dateComponents
+            if let calendarIdentifier = components.calendar?.identifier {
+                hasher.combine(String(describing: calendarIdentifier))
+            } else {
+                hasher.combine("")
+            }
+            hasher.combine(components.timeZone?.identifier ?? "")
+            hasher.combine(components.era ?? -1)
+            hasher.combine(components.year ?? -1)
+            hasher.combine(components.month ?? -1)
+            hasher.combine(components.day ?? -1)
+            hasher.combine(components.hour ?? -1)
+            hasher.combine(components.minute ?? -1)
+            hasher.combine(components.second ?? -1)
+            hasher.combine(components.weekday ?? -1)
+            hasher.combine(components.weekdayOrdinal ?? -1)
+            hasher.combine(components.weekOfMonth ?? -1)
+            hasher.combine(components.weekOfYear ?? -1)
+            hasher.combine(components.yearForWeekOfYear ?? -1)
+        } else if let trigger = request.trigger as? UNTimeIntervalNotificationTrigger {
+            hasher.combine("time-interval")
+            hasher.combine(trigger.repeats)
+            hasher.combine(Int(trigger.timeInterval))
+        } else {
+            hasher.combine("other")
+        }
+        return hasher.finalize()
     }
 
     private func notificationSettings() async -> UNNotificationSettings {
@@ -485,10 +552,17 @@ final class NotificationService: NSObject {
     }
 
     private func emitRoute(_ route: NotificationRouteAction) {
-        if let routeHandler {
-            routeHandler(route)
-        } else {
+        var handler: ((NotificationRouteAction) -> Void)?
+        routeStateLock.lock()
+        handler = routeHandler
+        if handler == nil {
             pendingRoutes.append(route)
+        }
+        routeStateLock.unlock()
+
+        guard let handler else { return }
+        DispatchQueue.main.async {
+            handler(route)
         }
     }
 

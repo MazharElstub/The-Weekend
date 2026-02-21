@@ -280,20 +280,6 @@ struct ProtectedStripeDot: View {
     }
 }
 
-struct ProtectedStripeBar: View {
-    var width: CGFloat = 4
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: width / 2, style: .continuous)
-            .fill(Color.protectedStripeGradient)
-            .frame(width: width)
-            .overlay(
-                RoundedRectangle(cornerRadius: width / 2, style: .continuous)
-                    .stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
-            )
-    }
-}
-
 struct TagPill: View {
     var text: String
     var color: Color
