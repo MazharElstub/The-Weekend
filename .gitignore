@@ -36,3 +36,8 @@ fastlane/test_output/
 
 # Tool-specific local state
 .netlify/
+
+# Website workspace artifacts
+website/node_modules/
+website/dist/
+website/.astro/

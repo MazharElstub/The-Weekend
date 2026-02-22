@@ -1,0 +1,45 @@
+---
+import MainLayout from '../../layouts/MainLayout.astro';
+
+const normalizeIOSDeepLink = (value: string | undefined): string => {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return 'theweekend://';
+  if (trimmed.startsWith('weekendplanner://')) {
+    return `theweekend://${trimmed.slice('weekendplanner://'.length)}`;
+  }
+  return trimmed;
+};
+
+const normalizeAppStoreURL = (value: string | undefined): string => {
+  const trimmed = (value || '').trim();
+  const fallback = 'https://apps.apple.com/app/id6758899389';
+  if (!trimmed) return fallback;
+  if (
+    trimmed === 'https://apps.apple.com' ||
+    trimmed === 'https://apps.apple.com/' ||
+    /^https:\/\/apps\.apple\.com\/[a-z]{2}\/?$/.test(trimmed)
+  ) {
+    return fallback;
+  }
+  return trimmed;
+};
+
+const iosDeepLink = normalizeIOSDeepLink(import.meta.env.PUBLIC_IOS_DEEPLINK);
+const appStoreURL = normalizeAppStoreURL(import.meta.env.PUBLIC_APPSTORE_URL);
+const pageTitle = 'Password Updated | The Weekend';
+const description = 'Password reset completed. Open the iOS app and sign in with your new password.';
+---
+
+<MainLayout title={pageTitle} description={description}>
+  <section class="panel">
+    <p class="kicker">Password reset</p>
+    <h1>Your password has been updated.</h1>
+    <p>
+      You can now return to The Weekend and sign in using your new password.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href={iosDeepLink}>Open app</a>
+      <a class="btn btn-secondary" href={appStoreURL} target="_blank" rel="noreferrer noopener">Open App Store</a>
+    </div>
+  </section>
+</MainLayout>

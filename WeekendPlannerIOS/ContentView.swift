@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import AuthenticationServices
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -23,6 +24,7 @@ struct RootView: View {
     @State private var detailSelection: WeekendSelection?
     @State private var addPlanPresentation: AddPlanPresentation?
     @State private var showAddReminderSheet = false
+    @State private var notificationMessageDismissTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
@@ -97,7 +99,8 @@ struct RootView: View {
                     addPlanPresentation = AddPlanPresentation(
                         weekendKey: key,
                         bypassProtection: bypass,
-                        initialDate: nil
+                        initialDate: nil,
+                        prefill: nil
                     )
                 }
             )
@@ -106,7 +109,8 @@ struct RootView: View {
             AddPlanView(
                 weekendKey: presentation.weekendKey,
                 bypassProtection: presentation.bypassProtection,
-                initialDate: presentation.initialDate
+                initialDate: presentation.initialDate,
+                prefill: presentation.prefill
             )
             .id(presentation.id)
         }
@@ -135,6 +139,14 @@ struct RootView: View {
                 AuthSplashView()
             }
         }
+        .overlay(alignment: .top) {
+            if let message = state.pendingNotificationMessage {
+                notificationMessageBanner(message)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.top, 10)
+                    .padding(.horizontal, 12)
+            }
+        }
         .onAppear {
             applyPendingNavigationIfNeeded()
         }
@@ -155,6 +167,13 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { _, _ in
             applyPendingNavigationIfNeeded()
+        }
+        .onChange(of: state.pendingNotificationMessage) { _, newValue in
+            scheduleNotificationMessageDismiss(message: newValue)
+        }
+        .onDisappear {
+            notificationMessageDismissTask?.cancel()
+            notificationMessageDismissTask = nil
         }
     }
 
@@ -231,7 +250,8 @@ struct RootView: View {
         addPlanPresentation = AddPlanPresentation(
             weekendKey: CalendarHelper.plannerWeekKey(for: initialDate),
             bypassProtection: false,
-            initialDate: initialDate
+            initialDate: initialDate,
+            prefill: nil
         )
     }
 
@@ -243,6 +263,45 @@ struct RootView: View {
         state.showAuthSplash || state.showOnboarding || state.showOnboardingChecklist
     }
 
+    private func notificationMessageBanner(_ message: String) -> some View {
+        Text(message)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Color.primary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(AppSurfaceStyle.cardFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(AppSurfaceStyle.cardStroke, lineWidth: 1)
+            )
+            .shadow(
+                color: AppSurfaceStyle.cardShadowColor,
+                radius: AppSurfaceStyle.cardShadowRadius,
+                x: 0,
+                y: AppSurfaceStyle.cardShadowYOffset
+            )
+    }
+
+    private func scheduleNotificationMessageDismiss(message: String?) {
+        notificationMessageDismissTask?.cancel()
+        notificationMessageDismissTask = nil
+        guard let message, !message.isEmpty else { return }
+        notificationMessageDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            guard !Task.isCancelled else { return }
+            if state.pendingNotificationMessage == message {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    state.consumePendingNotificationMessage()
+                }
+            }
+        }
+    }
+
     private func applyPendingNavigationIfNeeded() {
         guard scenePhase == .active else { return }
         guard !hasBlockingOverlay else { return }
@@ -251,7 +310,8 @@ struct RootView: View {
             addPlanPresentation = AddPlanPresentation(
                 weekendKey: weekendKey,
                 bypassProtection: state.pendingAddPlanBypassProtection,
-                initialDate: state.pendingAddPlanInitialDate
+                initialDate: state.pendingAddPlanInitialDate,
+                prefill: state.pendingAddPlanPrefill
             )
             state.consumePendingAddPlanSelection()
             return
@@ -269,6 +329,7 @@ private struct AddPlanPresentation: Identifiable {
     let weekendKey: String?
     let bypassProtection: Bool
     let initialDate: Date?
+    let prefill: AddPlanPrefill?
 }
 
 private struct LegacyTabBarBackgroundModifier: ViewModifier {
@@ -1855,6 +1916,7 @@ struct TimelineItemView: View {
     let syncState: SyncState
     let isImported: Bool
     let importConflictState: ImportConflictState
+    var onSelect: (() -> Void)? = nil
     var onEdit: () -> Void
     var onMove: () -> Void
     var onDuplicate: () -> Void
@@ -1864,28 +1926,17 @@ struct TimelineItemView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
-                Circle()
-                    .fill(event.planType == .travel ? Color.travelCoral : Color.planBlue)
-                    .frame(width: 8, height: 8)
-                    .padding(.top, 6)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(timeLabel)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(event.title)
-                        .font(.subheadline.weight(.medium))
-                    if isImported {
-                        Label("Imported", systemImage: "arrow.down.circle")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .labelStyle(.iconOnly)
-                            .padding(.leading, 2)
-                            .accessibilityLabel("Imported calendar event")
+                if let onSelect {
+                    Button(action: onSelect) {
+                        eventSummary
                     }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    eventSummary
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Spacer()
                 HStack(spacing: 8) {
                     if importConflictState == .pending {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -1969,6 +2020,38 @@ struct TimelineItemView: View {
         }
     }
 
+    private var eventSummary: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(event.planType == .travel ? Color.travelCoral : Color.planBlue)
+                .frame(width: 8, height: 8)
+                .padding(.top, 6)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(timeLabel)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(event.title)
+                    .font(.subheadline.weight(.medium))
+                if isImported {
+                    Label("Imported", systemImage: "arrow.down.circle")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.iconOnly)
+                        .padding(.leading, 2)
+                        .accessibilityLabel("Imported calendar event")
+                }
+            }
+
+        }
+        .contentShape(Rectangle())
+        .alert(syncStatusAlertTitle, isPresented: $showingSyncStatusInfo) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(syncStatusAlertMessage)
+        }
+    }
+
     private func formatTime(_ value: String) -> String {
         let parts = value.split(separator: ":")
         guard parts.count >= 2 else { return value }
@@ -2038,6 +2121,7 @@ struct WeekendDetailsView: View {
     @State private var showBlockedAlert = false
     @State private var eventToRemove: WeekendEvent?
     @State private var eventToEdit: WeekendEvent?
+    @State private var selectedEventForDetails: WeekendEvent?
     @State private var showAddProtectedPrompt = false
     @State private var carryForwardResultMessage: String?
     @State private var weekendNoteDraft = ""
@@ -2103,6 +2187,7 @@ struct WeekendDetailsView: View {
                             events: eventsFor(day),
                             holidayPills: holidayPillsFor(day),
                             isProtected: isProtected,
+                            onSelect: { selectedEventForDetails = $0 },
                             onEdit: { eventToEdit = $0 },
                             onMove: { eventToEdit = $0 },
                             onDuplicate: duplicateEvent,
@@ -2256,6 +2341,12 @@ struct WeekendDetailsView: View {
                 editingEvent: event
             )
         }
+        .sheet(item: $selectedEventForDetails) { event in
+            WeekendPlanDetailsSheet(
+                event: event,
+                description: state.eventDescription(for: event.id)
+            )
+        }
         .alert("Carry-forward result", isPresented: Binding(
             get: { carryForwardResultMessage != nil },
             set: { if !$0 { carryForwardResultMessage = nil } }
@@ -2304,6 +2395,7 @@ struct DayDetailColumn: View {
     let events: [WeekendEvent]
     let holidayPills: [HolidayInfoPill]
     let isProtected: Bool
+    var onSelect: ((WeekendEvent) -> Void)? = nil
     var onEdit: (WeekendEvent) -> Void
     var onMove: (WeekendEvent) -> Void
     var onDuplicate: (WeekendEvent) -> Void
@@ -2344,16 +2436,19 @@ struct DayDetailColumn: View {
                 }
             } else {
                 ForEach(events) { event in
-                    TimelineItemView(
-                        event: event,
-                        syncState: syncStateForEvent(event),
-                        isImported: isImportedEvent(event),
-                        importConflictState: conflictStateForEvent(event),
-                        onEdit: { onEdit(event) },
-                        onMove: { onMove(event) },
-                        onDuplicate: { onDuplicate(event) },
-                        onRemove: { onRemove(event) },
-                        onAcknowledgeConflict: { onAcknowledgeConflict(event) }
+                        TimelineItemView(
+                            event: event,
+                            syncState: syncStateForEvent(event),
+                            isImported: isImportedEvent(event),
+                            importConflictState: conflictStateForEvent(event),
+                            onSelect: onSelect.map { selectEvent in
+                                { selectEvent(event) }
+                            },
+                            onEdit: { onEdit(event) },
+                            onMove: { onMove(event) },
+                            onDuplicate: { onDuplicate(event) },
+                            onRemove: { onRemove(event) },
+                            onAcknowledgeConflict: { onAcknowledgeConflict(event) }
                     )
                 }
             }
@@ -2374,6 +2469,56 @@ struct DayDetailColumn: View {
     }
 }
 
+private struct WeekendPlanDetailsSheet: View {
+    let event: WeekendEvent
+    let description: String
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Plan") {
+                    LabeledContent("Title", value: event.title)
+                    LabeledContent("Type", value: event.planType.label)
+                    LabeledContent("When", value: whenLabel)
+                }
+
+                Section("Description") {
+                    if normalizedDescription.isEmpty {
+                        Text("No description added for this plan.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(normalizedDescription)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .weekendSettingsListStyle()
+            .navigationTitle("Plan Details")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var normalizedDescription: String {
+        description.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var whenLabel: String {
+        let days = event.dayValues.map(\.label).joined(separator: ", ")
+        if event.isAllDay {
+            return days.isEmpty ? "All day" : "\(days) • All day"
+        }
+        let timeRange = "\(formatTime(event.startTime)) - \(formatTime(event.endTime))"
+        return days.isEmpty ? timeRange : "\(days) • \(timeRange)"
+    }
+
+    private func formatTime(_ value: String) -> String {
+        let parts = value.split(separator: ":")
+        guard parts.count >= 2 else { return value }
+        return "\(parts[0]):\(parts[1])"
+    }
+}
+
 struct AddPlanView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
@@ -2382,6 +2527,7 @@ struct AddPlanView: View {
     let bypassProtection: Bool
     let editingEvent: WeekendEvent?
     let initialDate: Date?
+    let prefill: AddPlanPrefill?
 
     @State private var title = ""
     @State private var planType: PlanType = .plan
@@ -2406,12 +2552,14 @@ struct AddPlanView: View {
         weekendKey: String?,
         bypassProtection: Bool,
         editingEvent: WeekendEvent? = nil,
-        initialDate: Date? = nil
+        initialDate: Date? = nil,
+        prefill: AddPlanPrefill? = nil
     ) {
         self.weekendKey = weekendKey
         self.bypassProtection = bypassProtection
         self.editingEvent = editingEvent
         self.initialDate = initialDate
+        self.prefill = prefill
 
         let calendar = CalendarHelper.calendar
         let baseDate: Date
@@ -2743,6 +2891,14 @@ struct AddPlanView: View {
             endDateTime = dateByApplying(timeComponents: endComponents, toDay: normalized) ?? startDateTime
         } else if let key = weekendKey {
             applyDefaultWeekendDate(from: key)
+        }
+        if let prefill {
+            if let prefilledTitle = prefill.title, !prefilledTitle.isEmpty {
+                title = prefilledTitle
+            }
+            if let prefilledDetails = prefill.details, !prefilledDetails.isEmpty {
+                eventDescription = prefilledDetails
+            }
         }
         if selectedCalendarIDs.isEmpty {
             if let selected = state.selectedCalendarId {
@@ -3750,69 +3906,250 @@ struct CalendarInviteQRSheet: View {
 }
 
 struct AuthSplashView: View {
+    private enum AuthField {
+        case email
+        case password
+    }
+
     @EnvironmentObject private var state: AppState
     @State private var email = ""
     @State private var password = ""
+    @FocusState private var focusedField: AuthField?
+
+    private var trimmedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSubmitCredentials: Bool {
+        !trimmedEmail.isEmpty && !password.isEmpty && !state.isLoading
+    }
+
+    private var canCreateAccount: Bool {
+        !trimmedEmail.isEmpty && password.count >= 6 && !state.isLoading
+    }
+
+    private var canRequestPasswordReset: Bool {
+        !state.isLoading
+    }
 
     var body: some View {
         ZStack {
             AppSurfaceStyle.modalScrim.ignoresSafeArea()
             CardContainer {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("WEEKEND PLANNER")
-                        .font(.caption)
-                        .tracking(3)
-                        .foregroundColor(.secondary)
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("WEEKEND PLANNER")
+                            .font(.caption)
+                            .tracking(3)
+                            .foregroundColor(.secondary)
 
-                    Text("Welcome back")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("Welcome back")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
 
-                    Text("Sign in to see your plans across devices.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Account")
-                            .font(.headline)
-                        Text(state.session == nil ? "Not signed in." : "Signed in")
+                        Text("Sign in to see your plans across devices.")
                             .font(.callout)
                             .foregroundColor(.secondary)
 
-                        TextField("you@example.com", text: $email)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .textFieldStyle(PillTextFieldStyle())
-                        SecureField("Minimum 6 characters", text: $password)
-                            .textFieldStyle(PillTextFieldStyle())
-                    }
-
-                    VStack(spacing: 10) {
-                        Button("Sign in") {
-                            Task { await state.signIn(email: email, password: password) }
+                        if let message = state.authMessage, !message.isEmpty {
+                            authMessageBanner(message)
                         }
-                        .buttonStyle(OutlinePillButtonStyle(stroke: AppSurfaceStyle.cardStroke, foreground: .primary))
 
-                        Button("Create account") {
-                            Task { await state.signUp(email: email, password: password) }
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Sign in with email")
+                                .font(.headline)
+
+                            TextField("you@example.com", text: $email)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .keyboardType(.emailAddress)
+                                .textContentType(.username)
+                                .submitLabel(.next)
+                                .focused($focusedField, equals: .email)
+                                .onSubmit {
+                                    focusedField = .password
+                                }
+                                .textFieldStyle(PillTextFieldStyle())
+
+                            SecureField("Minimum 6 characters", text: $password)
+                                .textContentType(.password)
+                                .submitLabel(.go)
+                                .focused($focusedField, equals: .password)
+                                .onSubmit {
+                                    submitSignIn()
+                                }
+                                .textFieldStyle(PillTextFieldStyle())
+
+                            Button("Forgot password?") {
+                                requestPasswordReset()
+                            }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(canRequestPasswordReset ? Color.planBlue : .secondary)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .disabled(!canRequestPasswordReset)
                         }
-                        .buttonStyle(
-                            PillButtonStyle(
-                                fill: AppSurfaceStyle.primaryButtonFill,
-                                foreground: AppSurfaceStyle.primaryButtonForeground
+
+                        VStack(spacing: 10) {
+                            Button {
+                                submitSignIn()
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if state.isLoading {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    }
+                                    Text("Sign in")
+                                }
+                            }
+                            .buttonStyle(
+                                PillButtonStyle(
+                                    fill: AppSurfaceStyle.primaryButtonFill,
+                                    foreground: AppSurfaceStyle.primaryButtonForeground
+                                )
                             )
-                        )
-                    }
+                            .disabled(!canSubmitCredentials)
 
-                    if let message = state.authMessage {
-                        Text(message)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            Button {
+                                focusedField = nil
+                                state.authMessage = nil
+                                Task { await state.signUp(email: email, password: password) }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    if state.isLoading {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    }
+                                    Text("Create account")
+                                }
+                            }
+                            .buttonStyle(OutlinePillButtonStyle(stroke: AppSurfaceStyle.cardStroke, foreground: .primary))
+                            .disabled(!canCreateAccount)
+                        }
+
+                        HStack(spacing: 10) {
+                            Capsule()
+                                .fill(AppSurfaceStyle.cardStroke.opacity(0.85))
+                                .frame(height: 1)
+                            Text("or")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Capsule()
+                                .fill(AppSurfaceStyle.cardStroke.opacity(0.85))
+                                .frame(height: 1)
+                        }
+
+                        SignInWithAppleButton(.signIn) { request in
+                            request.requestedScopes = [.fullName, .email]
+                        } onCompletion: { result in
+                            handleAppleSignInResult(result)
+                        }
+                        .signInWithAppleButtonStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .disabled(state.isLoading)
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
                 }
-                .padding(.horizontal, 8)
+                .scrollDismissesKeyboard(.interactively)
             }
             .frame(maxWidth: 520)
+            .padding(.horizontal, 24)
         }
+    }
+
+    @ViewBuilder
+    private func authMessageBanner(_ message: String) -> some View {
+        let tone = authMessageTone(for: message)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: tone.symbol)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(tone.color)
+                .padding(.top, 1)
+
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(tone.color.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(tone.color.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private func authMessageTone(for message: String) -> (color: Color, symbol: String) {
+        let normalized = message.lowercased()
+        let isSuccess = normalized.contains("check your email")
+            || normalized.contains("link sent")
+            || normalized.contains("redirecting")
+            || normalized.contains("verified")
+            || normalized.contains("confirm")
+        return isSuccess
+            ? (Color.freeGreen, "checkmark.circle.fill")
+            : (Color.protectedRed, "exclamationmark.triangle.fill")
+    }
+
+    private func submitSignIn() {
+        guard canSubmitCredentials else {
+            state.authMessage = "Enter both your email and password to sign in."
+            return
+        }
+        focusedField = nil
+        state.authMessage = nil
+        Task { await state.signIn(email: email, password: password) }
+    }
+
+    private func requestPasswordReset() {
+        guard !trimmedEmail.isEmpty else {
+            state.authMessage = "Enter your email to reset your password."
+            return
+        }
+        focusedField = nil
+        state.authMessage = nil
+        Task { await state.sendPasswordReset(email: email) }
+    }
+
+    private func handleAppleSignInResult(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let error):
+            if let authorizationError = error as? ASAuthorizationError,
+               authorizationError.code == .canceled {
+                return
+            }
+            state.authMessage = error.localizedDescription
+
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                state.authMessage = "Could not read Apple sign-in credentials."
+                return
+            }
+
+            guard
+                let identityTokenData = credential.identityToken,
+                let idToken = String(data: identityTokenData, encoding: .utf8)
+            else {
+                state.authMessage = "Could not validate Apple sign-in token."
+                return
+            }
+
+            let fullName = formattedName(from: credential.fullName)
+            Task {
+                await state.signInWithApple(idToken: idToken, fullName: fullName)
+            }
+        }
+    }
+
+    private func formattedName(from components: PersonNameComponents?) -> String? {
+        guard let components else { return nil }
+        let formatted = PersonNameComponentsFormatter().string(from: components)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return formatted.isEmpty ? nil : formatted
     }
 }
 

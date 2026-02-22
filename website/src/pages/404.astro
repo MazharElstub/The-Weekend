@@ -1,0 +1,20 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+
+const pageTitle = 'Page Not Found | The Weekend';
+const description = 'The page you requested was not found.';
+---
+
+<MainLayout title={pageTitle} description={description}>
+  <section class="panel">
+    <p class="kicker">404</p>
+    <h1>Page not found</h1>
+    <p>
+      The page you requested does not exist or may have moved.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="/">Go home</a>
+      <a class="btn btn-secondary" href="/support">Open support</a>
+    </div>
+  </section>
+</MainLayout>

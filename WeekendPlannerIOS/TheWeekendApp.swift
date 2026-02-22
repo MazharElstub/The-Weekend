@@ -27,6 +27,9 @@ struct TheWeekendApp: App {
                         break
                     }
                 }
+                .onOpenURL { url in
+                    state.handleIncomingURL(url)
+                }
         }
     }
 }

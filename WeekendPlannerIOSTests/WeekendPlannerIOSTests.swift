@@ -6,7 +6,9 @@
 //
 
 import Foundation
+import Supabase
 import Testing
+import UserNotifications
 @testable import WeekendPlannerIOS
 
 struct WeekendPlannerIOSTests {
@@ -1206,6 +1208,49 @@ struct WeekendPlannerIOSTests {
     }
 
     @Test
+    @MainActor
+    func sendPasswordResetRequiresEmail() async {
+        let state = AppState()
+
+        await state.sendPasswordReset(email: "   ")
+
+        #expect(state.authMessage == "Enter your email to reset your password.")
+        #expect(!state.isLoading)
+    }
+
+    @Test
+    @MainActor
+    func sendPasswordResetSuccessShowsConfirmationMessage() async {
+        let state = AppState()
+        var capturedEmail: String?
+
+        await state.sendPasswordReset(email: "  user@example.com  ") { email in
+            capturedEmail = email
+        }
+
+        #expect(capturedEmail == "user@example.com")
+        #expect(state.authMessage == "If an account exists for this email, a reset link has been sent. Check your inbox and spam folder.")
+        #expect(!state.isLoading)
+    }
+
+    @Test
+    @MainActor
+    func sendPasswordResetFailureShowsErrorMessage() async {
+        struct ForcedFailure: LocalizedError {
+            var errorDescription: String? { "forced failure" }
+        }
+
+        let state = AppState()
+
+        await state.sendPasswordReset(email: "user@example.com") { _ in
+            throw ForcedFailure()
+        }
+
+        #expect(state.authMessage == "forced failure")
+        #expect(!state.isLoading)
+    }
+
+    @Test
     func persistenceCoordinatorImmediateWriteTouchesOnlyTargetFile() async throws {
         let fileManager = FileManager.default
         let tempDirectory = fileManager.temporaryDirectory.appendingPathComponent("wp-cache-\(UUID().uuidString)", isDirectory: true)
@@ -1545,6 +1590,313 @@ struct WeekendPlannerIOSTests {
         #expect(state.topQuickAddChips(limit: 1).first?.id == "chip-high")
     }
 
+    @Test
+    func notificationTapResolver_UsesAddPlanForPlanningNudgeDefaultTap() {
+        let service = NotificationService(autoConfigure: false)
+
+        let decision = service.resolveTapDecision(
+            requestIdentifier: "weekend.nudge.next",
+            userInfo: [
+                "type": "planning-nudge",
+                "weekendKey": "2026-03-14"
+            ],
+            actionIdentifier: UNNotificationDefaultActionIdentifier
+        )
+
+        #expect(decision.payloadType == .planningNudge)
+        #expect(decision.routeAction == .addPlan("2026-03-14"))
+        #expect(decision.fallbackReason == nil)
+    }
+
+    @Test
+    func notificationTapResolver_DefaultTapOpensWeekendForNonNudgeNotifications() {
+        let service = NotificationService(autoConfigure: false)
+
+        let summaryDecision = service.resolveTapDecision(
+            requestIdentifier: "weekend.summary.next",
+            userInfo: [
+                "type": "summary",
+                "weekendKey": "2026-03-21"
+            ],
+            actionIdentifier: UNNotificationDefaultActionIdentifier
+        )
+        let eventDecision = service.resolveTapDecision(
+            requestIdentifier: "weekend.event.event-1.sat",
+            userInfo: [
+                "type": "event",
+                "weekendKey": "2026-03-21"
+            ],
+            actionIdentifier: UNNotificationDefaultActionIdentifier
+        )
+
+        #expect(summaryDecision.routeAction == .openWeekend("2026-03-21"))
+        #expect(eventDecision.routeAction == .openWeekend("2026-03-21"))
+    }
+
+    @Test
+    func notificationTapResolver_ExplicitActionsOverrideDefaultDestination() {
+        let service = NotificationService(autoConfigure: false)
+
+        let addDecision = service.resolveTapDecision(
+            requestIdentifier: "weekend.summary.next",
+            userInfo: [
+                "type": "summary",
+                "weekendKey": "2026-03-21"
+            ],
+            actionIdentifier: "weekend.action.add"
+        )
+        let openDecision = service.resolveTapDecision(
+            requestIdentifier: "weekend.nudge.next",
+            userInfo: [
+                "type": "planning-nudge",
+                "weekendKey": "2026-03-21"
+            ],
+            actionIdentifier: "weekend.action.open"
+        )
+
+        #expect(addDecision.routeAction == .addPlan("2026-03-21"))
+        #expect(openDecision.routeAction == .openWeekend("2026-03-21"))
+    }
+
+    @Test
+    func notificationTapResolver_SnoozeDoesNotEmitNavigationRoute() {
+        let service = NotificationService(autoConfigure: false)
+
+        let decision = service.resolveTapDecision(
+            requestIdentifier: "weekend.summary.next",
+            userInfo: [
+                "type": "summary",
+                "weekendKey": "2026-03-21"
+            ],
+            actionIdentifier: "weekend.action.snooze"
+        )
+
+        #expect(decision.routeAction == nil)
+    }
+
+    @Test
+    func notificationTapResolver_FallsBackToUpcomingWeekendForAddPlanWhenPayloadMissingWeekendKey() {
+        let service = NotificationService(autoConfigure: false)
+
+        let decision = service.resolveTapDecision(
+            requestIdentifier: "weekend.nudge.next",
+            userInfo: [
+                "type": "planning-nudge"
+            ],
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            upcomingWeekendKeyProvider: { "2026-04-04" }
+        )
+
+        #expect(decision.routeAction == .addPlan("2026-04-04"))
+        #expect(decision.fallbackReason == "missing-weekend-key-used-next-upcoming")
+    }
+
+    @Test
+    func notificationTapResolver_FallsBackToPlannerMessageForOpenWeekendWhenPayloadMissingWeekendKey() {
+        let service = NotificationService(autoConfigure: false)
+
+        let decision = service.resolveTapDecision(
+            requestIdentifier: "weekend.summary.next",
+            userInfo: [
+                "type": "summary"
+            ],
+            actionIdentifier: UNNotificationDefaultActionIdentifier
+        )
+
+        guard case .openPlanner(let message)? = decision.routeAction else {
+            Issue.record("Expected openPlanner fallback route.")
+            return
+        }
+        #expect(message == "That notification is no longer actionable. Opening Planner instead.")
+        #expect(decision.fallbackReason == "missing-weekend-key-opened-planner")
+    }
+
+    @Test
+    @MainActor
+    func appStateNotificationRouting_DefersRouteWhileAuthSplashShownAndReplaysAfterUnlock() {
+        let state = AppState()
+        state.session = makeSession()
+        state.showAuthSplash = true
+
+        state.handleNotificationRouteAction(.addPlan("2026-05-16"))
+        #expect(state.pendingAddPlanWeekendKey == nil)
+
+        state.showAuthSplash = false
+        state.replayDeferredNotificationRouteIfNeeded()
+
+        #expect(state.pendingAddPlanWeekendKey == "2026-05-16")
+    }
+
+    @Test
+    @MainActor
+    func appStateNotificationRouting_DefersRouteWhenSessionMissingAndReplaysAfterSessionRestore() {
+        let state = AppState()
+        state.showAuthSplash = false
+        state.session = nil
+
+        state.handleNotificationRouteAction(.openWeekend("2026-05-23"))
+        #expect(state.pendingWeekendSelection == nil)
+
+        state.session = makeSession()
+        state.replayDeferredNotificationRouteIfNeeded()
+
+        #expect(state.pendingWeekendSelection == "2026-05-23")
+    }
+
+    @Test
+    @MainActor
+    func appStateNotificationRouting_OpenPlannerRouteSetsTransientMessage() {
+        let state = AppState()
+        state.session = makeSession()
+        state.showAuthSplash = false
+
+        state.handleNotificationRouteAction(.openPlanner(message: "Legacy payload"))
+
+        #expect(state.selectedTab == .weekend)
+        #expect(state.pendingNotificationMessage == "Legacy payload")
+    }
+
+    @Test
+    @MainActor
+    func shareURLRouting_IgnoresInvalidRoutesAndAcceptsValidPayloadID() {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wp-share-url-\(UUID().uuidString)", isDirectory: true)
+        let store = SharedInboxStore(
+            appGroupIdentifier: "test.group.invalid",
+            fallbackBaseDirectory: tempDirectory
+        )
+        defer {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+
+        let payload = IncomingSharePayload(
+            id: UUID(),
+            url: URL(string: "https://example.com"),
+            text: "Read this article",
+            sourceAppBundleID: "com.apple.mobilesafari"
+        )
+        store.save(payload)
+
+        let state = AppState(sharedInboxStore: store)
+        state.session = makeSession()
+        state.showAuthSplash = false
+
+        state.handleIncomingURL(URL(string: "notweekend://share?id=\(payload.id.uuidString)")!)
+        #expect(state.pendingAddPlanWeekendKey == nil)
+
+        state.handleIncomingURL(URL(string: "theweekend://share?id=bad-id")!)
+        #expect(state.pendingAddPlanWeekendKey == nil)
+
+        state.handleIncomingURL(URL(string: "theweekend://share?id=\(payload.id.uuidString)")!)
+        #expect(state.pendingAddPlanWeekendKey != nil)
+        #expect(state.pendingAddPlanPrefill?.title == "Read this article")
+        #expect(store.load(id: payload.id) == nil)
+    }
+
+    @Test
+    @MainActor
+    func sharePayloadRouting_SignedInStagesAddPlanPrefillAndClearsStore() {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wp-share-signedin-\(UUID().uuidString)", isDirectory: true)
+        let store = SharedInboxStore(
+            appGroupIdentifier: "test.group.invalid",
+            fallbackBaseDirectory: tempDirectory
+        )
+        defer {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+
+        let payload = IncomingSharePayload(
+            id: UUID(),
+            url: URL(string: "https://www.theweekend.org.uk/plans"),
+            text: "Trip ideas\nCheck this one",
+            sourceAppBundleID: "com.apple.mobilesafari"
+        )
+        store.save(payload)
+
+        let state = AppState(sharedInboxStore: store)
+        state.session = makeSession()
+        state.showAuthSplash = false
+
+        state.handleSharePayload(id: payload.id)
+
+        #expect(state.selectedTab == .weekend)
+        #expect(state.pendingAddPlanWeekendKey != nil)
+        #expect(state.pendingAddPlanPrefill?.title == "Trip ideas")
+        #expect(state.pendingAddPlanPrefill?.details?.contains("https://www.theweekend.org.uk/plans") == true)
+        #expect(store.load(id: payload.id) == nil)
+    }
+
+    @Test
+    @MainActor
+    func sharePayloadRouting_DefersWhenSignedOutAndReplaysAfterSignIn() {
+        let tempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wp-share-deferred-\(UUID().uuidString)", isDirectory: true)
+        let store = SharedInboxStore(
+            appGroupIdentifier: "test.group.invalid",
+            fallbackBaseDirectory: tempDirectory
+        )
+        defer {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+
+        let payload = IncomingSharePayload(
+            id: UUID(),
+            url: URL(string: "https://example.com/weekend"),
+            text: "Weekend ideas",
+            sourceAppBundleID: "com.apple.mobilemail"
+        )
+        store.save(payload)
+
+        let state = AppState(sharedInboxStore: store)
+        state.session = nil
+        state.showAuthSplash = false
+
+        state.handleSharePayload(id: payload.id)
+        #expect(state.pendingAddPlanWeekendKey == nil)
+        #expect(state.pendingAddPlanPrefill == nil)
+        #expect(store.load(id: payload.id) != nil)
+
+        state.session = makeSession()
+        state.replayDeferredSharePayloadIfNeeded()
+
+        #expect(state.pendingAddPlanWeekendKey != nil)
+        #expect(state.pendingAddPlanPrefill?.title == "Weekend ideas")
+        #expect(store.load(id: payload.id) == nil)
+    }
+
+    @Test
+    func sharePrefillMapping_UsesTextThenHostAndBuildsDescription() {
+        let textAndURL = IncomingSharePayload(
+            id: UUID(),
+            url: URL(string: "https://www.example.com/ideas"),
+            text: "Plan this weekend\nMore context here",
+            sourceAppBundleID: "com.apple.mobilesafari"
+        )
+        let textAndURLPrefill = AddPlanPrefill.from(payload: textAndURL)
+        #expect(textAndURLPrefill?.title == "Plan this weekend")
+        #expect(textAndURLPrefill?.details?.contains("More context here") == true)
+        #expect(textAndURLPrefill?.details?.contains("https://www.example.com/ideas") == true)
+
+        let urlOnly = IncomingSharePayload(
+            id: UUID(),
+            url: URL(string: "https://www.apple.com/newsroom"),
+            text: nil,
+            sourceAppBundleID: "com.apple.mobilesafari"
+        )
+        let urlOnlyPrefill = AddPlanPrefill.from(payload: urlOnly)
+        #expect(urlOnlyPrefill?.title == "apple.com")
+        #expect(urlOnlyPrefill?.details == "https://www.apple.com/newsroom")
+
+        let empty = IncomingSharePayload(
+            id: UUID(),
+            url: nil,
+            text: "   \n  ",
+            sourceAppBundleID: nil
+        )
+        #expect(AddPlanPrefill.from(payload: empty) == nil)
+    }
+
     private func makeDate(
         year: Int,
         month: Int,
@@ -1594,6 +1946,27 @@ struct WeekendPlannerIOSTests {
             endTime: "10:00",
             userId: "user-1",
             calendarEventIdentifier: nil
+        )
+    }
+
+    private func makeSession() -> Session {
+        let now = Date()
+        let user = User(
+            id: UUID(),
+            appMetadata: [:],
+            userMetadata: [:],
+            aud: "authenticated",
+            email: "tests@example.com",
+            createdAt: now,
+            updatedAt: now
+        )
+        return Session(
+            accessToken: "test-access-token",
+            tokenType: "bearer",
+            expiresIn: 3600,
+            expiresAt: now.addingTimeInterval(3600).timeIntervalSince1970,
+            refreshToken: "test-refresh-token",
+            user: user
         )
     }
 

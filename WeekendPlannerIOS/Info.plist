@@ -20,12 +20,27 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleURLName</key>
+            <string>com.mazharelstub.theweekend.share</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>theweekend</string>
+            </array>
+        </dict>
+    </array>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>The Weekend uses Calendar access to warn about conflicts and optionally add your plans to Apple Calendar.</string>
     <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
     <string>The Weekend can add your saved plans to Apple Calendar when you enable export.</string>
+    <key>PasswordResetRedirectURL</key>
+    <string>https://www.theweekend.org.uk/reset-password</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

@@ -1549,6 +1549,7 @@ final class AppState: ObservableObject {
     @Published var countdownTimeZoneIdentifier: String?
     @Published var calendars: [PlannerCalendar] = []
     @Published var selectedCalendarId: String?
+    @Published var defaultCalendarId: String?
     @Published var notificationPermissionState: NotificationPermissionState = .notDetermined
     @Published var notificationPreferences: NotificationPreferences = .defaults
     @Published var calendarPermissionState: CalendarPermissionState = .notDetermined
@@ -1590,6 +1591,8 @@ final class AppState: ObservableObject {
     @Published var pendingAddPlanWeekendKey: String?
     @Published var pendingAddPlanBypassProtection = false
     @Published var pendingAddPlanInitialDate: Date?
+    @Published var pendingAddPlanPrefill: AddPlanPrefill?
+    @Published var pendingNotificationMessage: String?
     @Published var pendingSettingsPath: [SettingsDestination] = []
     private(set) var performanceSnapshot: PerformanceSnapshot = .empty
 
@@ -1601,10 +1604,15 @@ final class AppState: ObservableObject {
     private let calendarExportStore: CalendarExportStore
     private let localCacheStore: LocalCacheStore
     private let persistenceCoordinator: PersistenceCoordinator
+    private let sharedInboxStore: SharedInboxStore
     private let syncEngine: SyncEngine
     private let auditService: AuditService
     private let reportService: ReportService
     private let performanceMonitor: PerformanceMonitor
+    private let shareImportLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "WeekendPlannerIOS",
+        category: "ShareImport"
+    )
     private var periodicSyncTask: Task<Void, Never>?
     private var eventStoreObservationTask: Task<Void, Never>?
     private var isReconcilingImportedEvents = false
@@ -1657,6 +1665,8 @@ final class AppState: ObservableObject {
     private var lastNotificationRescheduleSignature: Int?
     private var lastPerformanceSnapshotRefreshAt: Date?
     private var lastForegroundHeavyRefreshAt: Date?
+    private var deferredNotificationRoute: NotificationRouteAction?
+    private var deferredSharePayloadId: UUID?
     private let bypassAuthSplashForUITests: Bool
     private let skipOnboardingForUITests: Bool
     private let forceOnboardingForUITests: Bool
@@ -1683,6 +1693,7 @@ final class AppState: ObservableObject {
     private enum CacheFile {
         static let calendars = "calendars_cache.json"
         static let selectedCalendarId = "selected_calendar_cache.json"
+        static let defaultCalendarId = "default_calendar_cache.json"
         static let events = "events_cache.json"
         static let protections = "protections_cache.json"
         static let templates = "templates_cache.json"
@@ -1711,6 +1722,7 @@ final class AppState: ObservableObject {
     enum CacheScope: CaseIterable {
         case calendars
         case selectedCalendarId
+        case defaultCalendarId
         case events
         case protections
         case templates
@@ -1736,6 +1748,7 @@ final class AppState: ObservableObject {
         calendarExportStore: CalendarExportStore = CalendarExportStore(),
         localCacheStore: LocalCacheStore = .shared,
         persistenceCoordinator: PersistenceCoordinator = PersistenceCoordinator(),
+        sharedInboxStore: SharedInboxStore = .shared,
         syncEngine: SyncEngine = SyncEngine(),
         auditService: AuditService = AuditService(),
         reportService: ReportService = ReportService(),
@@ -1757,10 +1770,12 @@ final class AppState: ObservableObject {
         self.calendarExportStore = calendarExportStore
         self.localCacheStore = localCacheStore
         self.persistenceCoordinator = persistenceCoordinator
+        self.sharedInboxStore = sharedInboxStore
         self.syncEngine = syncEngine
         self.auditService = auditService
         self.reportService = reportService
         self.performanceMonitor = performanceMonitor
+        self.sharedInboxStore.purgeExpiredPayloads()
         #if DEBUG
         let launchArguments = ProcessInfo.processInfo.arguments
         self.bypassAuthSplashForUITests = launchArguments.contains("--uitest-skip-auth-splash")
@@ -1779,7 +1794,13 @@ final class AppState: ObservableObject {
         self.personalReminders = Self.loadPersonalReminders()
         self.notificationPreferences = NotificationPreferences.load()
         self.calendars = localCacheStore.load([PlannerCalendar].self, fileName: CacheFile.calendars, fallback: [])
-        self.selectedCalendarId = localCacheStore.load(String?.self, fileName: CacheFile.selectedCalendarId, fallback: nil)
+        let cachedSelectedCalendarId = localCacheStore.load(String?.self, fileName: CacheFile.selectedCalendarId, fallback: nil)
+        self.selectedCalendarId = cachedSelectedCalendarId
+        self.defaultCalendarId = localCacheStore.load(
+            String?.self,
+            fileName: CacheFile.defaultCalendarId,
+            fallback: cachedSelectedCalendarId
+        )
         self.events = localCacheStore.load([WeekendEvent].self, fileName: CacheFile.events, fallback: [])
         self.protections = Set(localCacheStore.load([String].self, fileName: CacheFile.protections, fallback: []))
         self.calendarImportSettings = localCacheStore.load(
@@ -1831,9 +1852,10 @@ final class AppState: ObservableObject {
         } else {
             self.countdownTimeZoneIdentifier = nil
         }
+        self.notificationService.configureIfNeeded()
         self.notificationService.setRouteHandler { [weak self] routeAction in
             Task { @MainActor in
-                self?.handleNotificationRoute(routeAction)
+                self?.handleNotificationRouteAction(routeAction)
             }
         }
         self.periodicSyncTask = Task { [weak self] in
@@ -1872,6 +1894,7 @@ final class AppState: ObservableObject {
             refreshPerformanceSnapshot()
         }
 
+        sharedInboxStore.purgeExpiredPayloads()
         await refreshNotificationPermissionState()
         await refreshCalendarPermissionState()
         await refreshNotices()
@@ -1937,8 +1960,11 @@ final class AppState: ObservableObject {
         }
         self.showAuthSplash = session == nil
         if session != nil {
+            selectedCalendarId = defaultCalendarId
             await loadAll()
             evaluateOnboardingPresentation()
+            replayDeferredNotificationRouteIfNeeded()
+            replayDeferredSharePayloadIfNeeded()
         } else {
             showOnboarding = false
             showOnboardingChecklist = false
@@ -1957,18 +1983,34 @@ final class AppState: ObservableObject {
         defer { isLoading = false }
         do {
             try await signInWithRetry(email: email, password: password)
-            session = try await supabase.auth.session
-            showAuthSplash = false
-            authMessage = nil
-            await loadAll()
-            evaluateOnboardingPresentation()
-            await refreshNotificationPermissionState()
-            await refreshCalendarPermissionState()
-            await refreshAvailableExternalCalendars()
-            startEventStoreObservationIfNeeded()
-            await runInitialCalendarImport()
-            scheduleNotificationResync(reason: "signin", immediate: true)
-            scheduleSyncFlush(reason: "signin", immediate: true)
+            try await finalizeSuccessfulSignIn(reason: "signin")
+        } catch {
+            authMessage = authErrorMessage(from: error)
+        }
+    }
+
+    func signInWithApple(idToken: String, fullName: String? = nil) async {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            _ = try await supabase.auth.signInWithIdToken(
+                credentials: OpenIDConnectCredentials(
+                    provider: .apple,
+                    idToken: idToken
+                )
+            )
+
+            let normalizedFullName = fullName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let normalizedFullName, !normalizedFullName.isEmpty {
+                _ = try? await supabase.auth.update(
+                    user: UserAttributes(
+                        data: ["full_name": .string(normalizedFullName)]
+                    )
+                )
+            }
+
+            try await finalizeSuccessfulSignIn(reason: "signin-apple")
         } catch {
             authMessage = authErrorMessage(from: error)
         }
@@ -1983,6 +2025,47 @@ final class AppState: ObservableObject {
         } catch {
             authMessage = authErrorMessage(from: error)
         }
+    }
+
+    func sendPasswordReset(
+        email: String,
+        performResetRequest: ((_ email: String) async throws -> Void)? = nil
+    ) async {
+        let normalizedEmail = email
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !normalizedEmail.isEmpty else {
+            authMessage = "Enter your email to reset your password."
+            return
+        }
+
+        isLoading = true
+        authMessage = "Sending password reset email..."
+        defer { isLoading = false }
+
+        do {
+            if let performResetRequest {
+                try await performResetRequest(normalizedEmail)
+            } else {
+                try await supabase.auth.resetPasswordForEmail(
+                    normalizedEmail,
+                    redirectTo: passwordResetRedirectURL
+                )
+            }
+            authMessage = "If an account exists for this email, a reset link has been sent. Check your inbox and spam folder."
+        } catch {
+            authMessage = authErrorMessage(from: error)
+        }
+    }
+
+    private var passwordResetRedirectURL: URL? {
+        if let configured = (Bundle.main.object(forInfoDictionaryKey: "PasswordResetRedirectURL") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty,
+           let configuredURL = URL(string: configured) {
+            return configuredURL
+        }
+        return URL(string: "https://www.theweekend.org.uk/reset-password")
     }
 
     func signOut() async {
@@ -2084,6 +2167,7 @@ final class AppState: ObservableObject {
         showOnboardingChecklist = false
         calendars = []
         selectedCalendarId = nil
+        defaultCalendarId = nil
         events = []
         protections = []
         planTemplates = templateStore.load()
@@ -2108,7 +2192,11 @@ final class AppState: ObservableObject {
         pendingAddPlanWeekendKey = nil
         pendingAddPlanBypassProtection = false
         pendingAddPlanInitialDate = nil
+        pendingAddPlanPrefill = nil
+        pendingNotificationMessage = nil
         pendingSettingsPath = []
+        deferredNotificationRoute = nil
+        deferredSharePayloadId = nil
         lastAutomaticImportReconcileAt = nil
         lastForegroundHeavyRefreshAt = nil
         lastNotificationRescheduleSignature = nil
@@ -2169,6 +2257,24 @@ final class AppState: ObservableObject {
         return error.localizedDescription
     }
 
+    private func finalizeSuccessfulSignIn(reason: String) async throws {
+        session = try await supabase.auth.session
+        showAuthSplash = false
+        authMessage = nil
+        selectedCalendarId = defaultCalendarId
+        await loadAll()
+        evaluateOnboardingPresentation()
+        await refreshNotificationPermissionState()
+        await refreshCalendarPermissionState()
+        await refreshAvailableExternalCalendars()
+        startEventStoreObservationIfNeeded()
+        await runInitialCalendarImport()
+        replayDeferredNotificationRouteIfNeeded()
+        replayDeferredSharePayloadIfNeeded()
+        scheduleNotificationResync(reason: reason, immediate: true)
+        scheduleSyncFlush(reason: reason, immediate: true)
+    }
+
     func loadAll() async {
         dismissedInformationalSourceKeys = loadDismissedInformationalSourceKeysForCurrentUser()
         await loadCalendars()
@@ -2187,6 +2293,12 @@ final class AppState: ObservableObject {
         await loadProtections()
         await runInitialCalendarImport()
         scheduleNotificationResync(reason: "switch-calendar", immediate: true)
+    }
+
+    func setDefaultCalendar(calendarId: String) async {
+        guard defaultCalendarId != calendarId else { return }
+        defaultCalendarId = calendarId
+        persistCaches(scopes: [.defaultCalendarId])
     }
 
     func createCalendar(name: String) async -> Bool {
@@ -2324,6 +2436,78 @@ final class AppState: ObservableObject {
         }
     }
 
+    func deleteCalendar(calendarId: String) async -> Bool {
+        guard session != nil else { return false }
+
+        do {
+            let deleted: [PlannerCalendar] = try await supabase
+                .from("planner_calendars")
+                .delete()
+                .eq("id", value: calendarId)
+                .select("id,name,owner_user_id,share_code,max_members,created_at,updated_at")
+                .limit(1)
+                .execute()
+                .value
+
+            guard !deleted.isEmpty else {
+                authMessage = "Only the calendar owner can delete this calendar."
+                return false
+            }
+
+            await loadCalendars()
+            await loadEvents()
+            await loadProtections()
+            await runInitialCalendarImport()
+            scheduleNotificationResync(reason: "delete-calendar", immediate: true)
+            scheduleSyncFlush(reason: "delete-calendar", immediate: true)
+            authMessage = nil
+            return true
+        } catch {
+            authMessage = "Could not delete calendar. \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func leaveCalendar(calendarId: String) async -> Bool {
+        guard let session else { return false }
+        let userId = normalizedUserId(for: session)
+
+        if let calendar = calendars.first(where: { $0.id == calendarId }),
+           calendar.ownerUserId.lowercased() == userId {
+            authMessage = "Calendar owners cannot leave their own calendar. Delete it instead."
+            return false
+        }
+
+        do {
+            let removedMemberships: [CalendarMembership] = try await supabase
+                .from("calendar_members")
+                .delete()
+                .eq("calendar_id", value: calendarId)
+                .eq("user_id", value: userId)
+                .select("id,calendar_id,user_id,role,created_at")
+                .limit(1)
+                .execute()
+                .value
+
+            guard !removedMemberships.isEmpty else {
+                authMessage = "You are not a member of this calendar."
+                return false
+            }
+
+            await loadCalendars()
+            await loadEvents()
+            await loadProtections()
+            await runInitialCalendarImport()
+            scheduleNotificationResync(reason: "leave-calendar", immediate: true)
+            scheduleSyncFlush(reason: "leave-calendar", immediate: true)
+            authMessage = nil
+            return true
+        } catch {
+            authMessage = "Could not leave calendar. \(error.localizedDescription)"
+            return false
+        }
+    }
+
     private func loadCalendars() async {
         guard let session else { return }
         let userId = normalizedUserId(for: session)
@@ -2338,7 +2522,8 @@ final class AppState: ObservableObject {
             guard !calendarIDs.isEmpty else {
                 calendars = []
                 selectedCalendarId = nil
-                persistCaches(scopes: [.calendars, .selectedCalendarId])
+                defaultCalendarId = nil
+                persistCaches(scopes: [.calendars, .selectedCalendarId, .defaultCalendarId])
                 return
             }
 
@@ -2359,13 +2544,20 @@ final class AppState: ObservableObject {
                 }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
+            if let defaultCalendarId,
+               calendars.contains(where: { $0.id == defaultCalendarId }) {
+                // keep current default
+            } else {
+                defaultCalendarId = calendars.first?.id
+            }
+
             if let selectedCalendarId,
                calendars.contains(where: { $0.id == selectedCalendarId }) {
                 // keep current selection
             } else {
-                selectedCalendarId = calendars.first?.id
+                selectedCalendarId = defaultCalendarId ?? calendars.first?.id
             }
-            persistCaches(scopes: [.calendars, .selectedCalendarId])
+            persistCaches(scopes: [.calendars, .selectedCalendarId, .defaultCalendarId])
         } catch {
             authMessage = "Could not load calendars. \(error.localizedDescription)"
         }
@@ -4687,6 +4879,11 @@ final class AppState: ObservableObject {
         pendingAddPlanWeekendKey = nil
         pendingAddPlanBypassProtection = false
         pendingAddPlanInitialDate = nil
+        pendingAddPlanPrefill = nil
+    }
+
+    func consumePendingNotificationMessage() {
+        pendingNotificationMessage = nil
     }
 
     func consumePendingSettingsPath() {
@@ -4780,9 +4977,14 @@ final class AppState: ObservableObject {
         pendingAddPlanWeekendKey = CalendarHelper.plannerWeekKey(for: initialDate)
         pendingAddPlanBypassProtection = false
         pendingAddPlanInitialDate = initialDate
+        pendingAddPlanPrefill = nil
     }
 
-    private func handleNotificationRoute(_ routeAction: NotificationRouteAction) {
+    func handleNotificationRouteAction(_ routeAction: NotificationRouteAction) {
+        guard !showAuthSplash, session != nil else {
+            deferredNotificationRoute = routeAction
+            return
+        }
         switch routeAction {
         case .openWeekend(let weekendKey):
             selectedTab = .weekend
@@ -4794,7 +4996,74 @@ final class AppState: ObservableObject {
             pendingAddPlanWeekendKey = weekendKey
             pendingAddPlanBypassProtection = false
             pendingAddPlanInitialDate = nil
+            pendingAddPlanPrefill = nil
+        case .openPlanner(let message):
+            selectedTab = .weekend
+            pendingNotificationMessage = message
         }
+    }
+
+    func replayDeferredNotificationRouteIfNeeded() {
+        guard !showAuthSplash, session != nil, let deferredNotificationRoute else { return }
+        self.deferredNotificationRoute = nil
+        handleNotificationRouteAction(deferredNotificationRoute)
+    }
+
+    func handleIncomingURL(_ url: URL) {
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let scheme = components?.scheme?.lowercased()
+        let host = components?.host?.lowercased()
+        guard scheme == "theweekend", host == "share" else {
+            shareImportLogger.debug(
+                "Ignored URL with unsupported route: \(url.absoluteString, privacy: .public)"
+            )
+            return
+        }
+        guard let idValue = components?.queryItems?.first(where: { $0.name == "id" })?.value,
+              let payloadID = UUID(uuidString: idValue) else {
+            shareImportLogger.error(
+                "Share URL missing/invalid id parameter: \(url.absoluteString, privacy: .public)"
+            )
+            return
+        }
+        shareImportLogger.log("Received share URL payload id=\(payloadID.uuidString, privacy: .public)")
+        handleSharePayload(id: payloadID)
+    }
+
+    func replayDeferredSharePayloadIfNeeded() {
+        guard !showAuthSplash, session != nil, let deferredSharePayloadId else { return }
+        self.deferredSharePayloadId = nil
+        shareImportLogger.log("Replaying deferred share payload id=\(deferredSharePayloadId.uuidString, privacy: .public)")
+        handleSharePayload(id: deferredSharePayloadId)
+    }
+
+    func handleSharePayload(id: UUID) {
+        sharedInboxStore.purgeExpiredPayloads()
+        guard let payload = sharedInboxStore.load(id: id) else {
+            shareImportLogger.error("Share payload not found for id=\(id.uuidString, privacy: .public)")
+            return
+        }
+        guard !showAuthSplash, session != nil else {
+            deferredSharePayloadId = id
+            shareImportLogger.log("Deferring share payload until authenticated id=\(id.uuidString, privacy: .public)")
+            return
+        }
+        guard let prefill = AddPlanPrefill.from(payload: payload) else {
+            shareImportLogger.error("Share payload could not be converted to prefill id=\(id.uuidString, privacy: .public)")
+            sharedInboxStore.remove(id: id)
+            return
+        }
+
+        let initialDate = nextFutureHolidayDate() ?? Date()
+        let weekendKey = CalendarHelper.plannerWeekKey(for: initialDate)
+        selectedTab = .weekend
+        selectedMonthKey = monthSelectionKey(for: weekendKey)
+        pendingAddPlanWeekendKey = weekendKey
+        pendingAddPlanBypassProtection = false
+        pendingAddPlanInitialDate = initialDate
+        pendingAddPlanPrefill = prefill
+        sharedInboxStore.remove(id: id)
+        shareImportLogger.log("Staged share payload for add-plan flow id=\(id.uuidString, privacy: .public)")
     }
 
     private func scheduleLinkedEventUpdate(for event: WeekendEvent) {
@@ -5774,6 +6043,7 @@ final class AppState: ObservableObject {
         switch scope {
         case .calendars: return CacheFile.calendars
         case .selectedCalendarId: return CacheFile.selectedCalendarId
+        case .defaultCalendarId: return CacheFile.defaultCalendarId
         case .events: return CacheFile.events
         case .protections: return CacheFile.protections
         case .templates: return CacheFile.templates
@@ -5802,6 +6072,8 @@ final class AppState: ObservableObject {
                 persistenceCoordinator.scheduleSave(calendars, fileName: fileName(for: scope), policy: policy)
             case .selectedCalendarId:
                 persistenceCoordinator.scheduleSave(selectedCalendarId, fileName: fileName(for: scope), policy: policy)
+            case .defaultCalendarId:
+                persistenceCoordinator.scheduleSave(defaultCalendarId, fileName: fileName(for: scope), policy: policy)
             case .events:
                 persistenceCoordinator.scheduleSave(events, fileName: fileName(for: scope), policy: policy)
             case .protections:

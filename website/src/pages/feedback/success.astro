@@ -1,0 +1,21 @@
+---
+import MainLayout from '../../layouts/MainLayout.astro';
+
+const pageTitle = 'Feedback Sent | The Weekend';
+const description = 'Confirmation page for feedback form submissions.';
+---
+
+<MainLayout title={pageTitle} description={description}>
+  <section class="panel">
+    <p class="kicker">Thank you</p>
+    <h1>Your message was sent.</h1>
+    <p>
+      We received your submission. If you added a contact email, we may follow up there.
+      For urgent support, use the support contact listed on the support page.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="/">Back to home</a>
+      <a class="btn btn-secondary" href="/support">Support options</a>
+    </div>
+  </section>
+</MainLayout>
