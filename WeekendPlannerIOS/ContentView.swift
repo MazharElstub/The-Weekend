@@ -2042,8 +2042,14 @@ struct TimelineItemView: View {
                         .accessibilityLabel("Imported calendar event")
                 }
             }
+
         }
         .contentShape(Rectangle())
+        .alert(syncStatusAlertTitle, isPresented: $showingSyncStatusInfo) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(syncStatusAlertMessage)
+        }
     }
 
     private func formatTime(_ value: String) -> String {
