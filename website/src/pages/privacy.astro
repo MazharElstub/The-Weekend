@@ -1,0 +1,92 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+
+const supportEmail = 'support@theweekend.org.uk';
+const pageTitle = 'Privacy Policy | The Weekend';
+const description = 'Privacy policy for The Weekend, including account data, sync data, notifications, and retention details.';
+---
+
+<MainLayout title={pageTitle} description={description}>
+  <section class="panel">
+    <p class="kicker">Privacy Policy</p>
+    <h1>The Weekend Privacy Policy</h1>
+    <p>Last updated: February 21, 2026</p>
+    <p>
+      This policy describes how The Weekend handles your information when you use the iOS app and this support website.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>1. Information we process</h2>
+    <ul class="list-clean">
+      <li>Account information: email address and authentication metadata.</li>
+      <li>Planner content: calendars, weekend plans, shared-calendar membership, and related notes.</li>
+      <li>Operational diagnostics: limited error and sync metadata needed to provide core reliability.</li>
+      <li>Feedback submissions: details you provide through the feedback form (contact email is optional).</li>
+    </ul>
+  </section>
+
+  <section class="section panel">
+    <h2>2. Tracking and advertising</h2>
+    <p>
+      The Weekend does not configure ad-tracking domains in the app privacy manifest and does not sell personal data.
+    </p>
+    <p>
+      We do not use this website to run behavioral advertising profiles.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>3. Why we use your information</h2>
+    <ul class="list-clean">
+      <li>To provide account access, sync calendars, and maintain shared-planning features.</li>
+      <li>To send app notifications when enabled by you.</li>
+      <li>To respond to support questions, bug reports, and feature requests.</li>
+      <li>To protect platform integrity, prevent abuse, and comply with legal obligations.</li>
+    </ul>
+  </section>
+
+  <section class="section panel">
+    <h2>4. Data retention</h2>
+    <p>
+      We retain account and planner data while your account remains active.
+      When you permanently delete your account in-app, account data is removed in line with product deletion behavior.
+    </p>
+    <p>
+      Some limited records may be retained when required for security, fraud prevention, or legal compliance.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>5. Account deletion and your choices</h2>
+    <p>
+      You can permanently delete your account directly in the iOS app at
+      <strong>Settings -> Account -> Delete account</strong>.
+    </p>
+    <p>
+      If you own shared calendars, the app provides ownership-transfer or deletion options before final confirmation.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>6. Website forms and contact</h2>
+    <p>
+      Form submissions are used only for support and product feedback handling.
+      Contact email is optional unless you want a response.
+    </p>
+    <p>
+      Support contact: <a href={`mailto:${supportEmail}`}>{supportEmail}</a>
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>7. Policy updates</h2>
+    <p>
+      We may revise this policy to reflect product, legal, or operational updates.
+      Material updates will be reflected by the date above.
+    </p>
+    <p>
+      For questions, contact <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+    </p>
+  </section>
+</MainLayout>

@@ -494,140 +494,87 @@ struct AccountSettingsView: View {
 struct CalendarSettingsView: View {
     @EnvironmentObject private var state: AppState
 
-    @State private var qrInviteCalendar: PlannerCalendar?
-    @State private var renameCalendarName = ""
-    @State private var newCalendarName = ""
-    @State private var joinCalendarCode = ""
+    @State private var showingCreateCalendarSheet = false
+    @State private var showingJoinCalendarSheet = false
     @State private var calendarActionMessage: String?
+    @State private var calendarActionMessageIsError = false
 
     var body: some View {
         List {
+            if let calendarActionMessage {
+                Section {
+                    CalendarActionMessageView(
+                        message: calendarActionMessage,
+                        isError: calendarActionMessageIsError
+                    )
+                }
+            }
+
             Section {
+                LabeledContent("Current view", value: selectedCalendar?.name ?? "None")
+                LabeledContent("Default on launch", value: defaultCalendar?.name ?? "None")
+            } header: {
+                Text("Overview")
+            } footer: {
+                Text("Current view controls what you are looking at right now. Default is used when the app opens.")
+            }
+
+            Section("Your Calendars") {
                 if state.calendars.isEmpty {
                     Text("No calendars yet. Create one to start planning.")
                         .foregroundStyle(.secondary)
                 } else {
-                    Picker("Calendar", selection: activeCalendarBinding) {
-                        ForEach(state.calendars) { calendar in
-                            Text(calendar.name).tag(calendar.id)
-                        }
-                    }
-
-                    if let selected = selectedCalendar {
-                        LabeledContent("Name", value: selected.name)
-                        LabeledContent("Members", value: "\(selected.memberCount)/\(selected.maxMembers)")
-                    }
-                }
-            } header: {
-                Text("Current Calendar")
-            } footer: {
-                Text("Select the calendar you are currently planning in.")
-            }
-
-            Section {
-                if let selected = selectedCalendar {
-                    LabeledContent("Share code", value: selected.shareCode)
-
-                    ShareLink(item: inviteShareText(for: selected)) {
-                        Label("Share invite code", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        copyShareCode(selected.shareCode)
-                        calendarActionMessage = "Share code copied."
-                    } label: {
-                        Label("Copy invite code", systemImage: "doc.on.doc")
-                    }
-                    Button {
-                        qrInviteCalendar = selected
-                    } label: {
-                        Label("Show invite QR code", systemImage: "qrcode")
-                    }
-                } else {
-                    Text("Create or join a calendar to unlock sharing.")
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Invite & Share")
-            } footer: {
-                Text("Shared calendars support up to 5 collaborators.")
-            }
-
-            Section("Rename Current Calendar") {
-                if let selected = selectedCalendar {
-                    TextField("New name", text: $renameCalendarName)
-                        .textInputAutocapitalization(.words)
-                    Button("Save calendar name") {
-                        Task {
-                            let success = await state.renameCalendar(
-                                calendarId: selected.id,
-                                to: renameCalendarName
+                    ForEach(state.calendars) { calendar in
+                        NavigationLink {
+                            CalendarDetailSettingsView(
+                                calendarId: calendar.id,
+                                calendarActionMessage: $calendarActionMessage,
+                                calendarActionMessageIsError: $calendarActionMessageIsError
                             )
-                            if success {
-                                renameCalendarName = ""
-                                calendarActionMessage = "Calendar renamed."
-                            } else {
-                                calendarActionMessage = state.authMessage ?? "Could not rename calendar."
-                            }
+                        } label: {
+                            CalendarSettingsCalendarRow(
+                                calendar: calendar,
+                                roleLabel: roleLabel(for: calendar),
+                                membersLabel: membersLabel(for: calendar),
+                                isCurrent: calendar.id == state.selectedCalendarId,
+                                isDefault: calendar.id == state.defaultCalendarId
+                            )
                         }
+                        .accessibilityIdentifier("settings.calendars.row.\(calendar.id)")
                     }
-                    .disabled(renameCalendarName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                } else {
-                    Text("No active calendar selected.")
-                        .foregroundStyle(.secondary)
                 }
             }
 
-            Section("Create Calendar") {
-                TextField("New calendar name", text: $newCalendarName)
-                    .textInputAutocapitalization(.words)
-                Button("Create calendar") {
-                    Task {
-                        let success = await state.createCalendar(name: newCalendarName)
-                        if success {
-                            newCalendarName = ""
-                            calendarActionMessage = "Calendar created."
-                        } else {
-                            calendarActionMessage = state.authMessage ?? "Could not create calendar."
-                        }
-                    }
+            Section("Add Calendar") {
+                Button {
+                    showingCreateCalendarSheet = true
+                } label: {
+                    Label("Create calendar", systemImage: "plus.circle")
                 }
-                .disabled(newCalendarName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+                .accessibilityIdentifier("settings.calendars.create.open")
 
-            Section("Join Calendar") {
-                TextField("Join with share code", text: $joinCalendarCode)
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                Button("Join shared calendar") {
-                    Task {
-                        let success = await state.joinCalendar(shareCode: joinCalendarCode)
-                        if success {
-                            joinCalendarCode = ""
-                            calendarActionMessage = "Joined shared calendar."
-                        } else {
-                            calendarActionMessage = state.authMessage ?? "Could not join calendar."
-                        }
-                    }
+                Button {
+                    showingJoinCalendarSheet = true
+                } label: {
+                    Label("Join with code", systemImage: "person.2.badge.plus")
                 }
-                .disabled(joinCalendarCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            if let calendarActionMessage {
-                Section {
-                    Text(calendarActionMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                .accessibilityIdentifier("settings.calendars.join.open")
             }
         }
         .weekendSettingsListStyle()
         .navigationTitle("Calendars")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $qrInviteCalendar) { calendar in
-            CalendarInviteQRSheet(calendar: calendar) { code in
-                copyShareCode(code)
-                calendarActionMessage = "Share code copied."
-            }
+        .sheet(isPresented: $showingCreateCalendarSheet) {
+            CreateCalendarSheetView(
+                calendarActionMessage: $calendarActionMessage,
+                calendarActionMessageIsError: $calendarActionMessageIsError
+            )
+        }
+        .sheet(isPresented: $showingJoinCalendarSheet) {
+            JoinCalendarSheetView(
+                calendarActionMessage: $calendarActionMessage,
+                calendarActionMessageIsError: $calendarActionMessageIsError
+            )
         }
     }
 
@@ -636,13 +583,278 @@ struct CalendarSettingsView: View {
         return state.calendars.first(where: { $0.id == selectedId })
     }
 
-    private var activeCalendarBinding: Binding<String> {
-        Binding(
-            get: { state.selectedCalendarId ?? state.calendars.first?.id ?? "" },
-            set: { value in
-                Task { await state.switchCalendar(to: value) }
+    private var defaultCalendar: PlannerCalendar? {
+        guard let defaultId = state.defaultCalendarId else { return nil }
+        return state.calendars.first(where: { $0.id == defaultId })
+    }
+
+    private func isOwner(_ calendar: PlannerCalendar) -> Bool {
+        guard let currentUserId = state.session?.user.id.uuidString.lowercased() else { return false }
+        return calendar.ownerUserId.lowercased() == currentUserId
+    }
+
+    private func roleLabel(for calendar: PlannerCalendar) -> String {
+        isOwner(calendar) ? "Owner" : "Member"
+    }
+
+    private func membersLabel(for calendar: PlannerCalendar) -> String {
+        "Members \(calendar.memberCount)/\(calendar.maxMembers)"
+    }
+}
+
+struct CalendarDetailSettingsView: View {
+    @EnvironmentObject private var state: AppState
+
+    let calendarId: String
+    @Binding var calendarActionMessage: String?
+    @Binding var calendarActionMessageIsError: Bool
+
+    @State private var qrInviteCalendar: PlannerCalendar?
+    @State private var pendingCalendarDeletion: PlannerCalendar?
+    @State private var pendingCalendarLeave: PlannerCalendar?
+    @State private var showingRenameCalendarSheet = false
+
+    var body: some View {
+        List {
+            messageSection
+            if let calendar {
+                calendarDetailSections(for: calendar)
+            } else {
+                missingCalendarSection
             }
-        )
+        }
+        .weekendSettingsListStyle()
+        .navigationTitle(calendar?.name ?? "Calendar")
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $qrInviteCalendar) { calendar in
+            CalendarInviteQRSheet(calendar: calendar) { code in
+                copyShareCode(code)
+                setSuccessMessage("Share code copied.")
+            }
+        }
+        .sheet(isPresented: $showingRenameCalendarSheet) {
+            if let calendar {
+                RenameCalendarSheetView(
+                    calendar: calendar,
+                    calendarActionMessage: $calendarActionMessage,
+                    calendarActionMessageIsError: $calendarActionMessageIsError
+                )
+            }
+        }
+        .confirmationDialog(
+            "Leave this calendar?",
+            isPresented: Binding(
+                get: { pendingCalendarLeave != nil },
+                set: { isPresented in
+                    if !isPresented { pendingCalendarLeave = nil }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let calendar = pendingCalendarLeave {
+                Button("Leave \"\(calendar.name)\"", role: .destructive) {
+                    Task {
+                        let success = await state.leaveCalendar(calendarId: calendar.id)
+                        if success {
+                            setSuccessMessage("You left the calendar.")
+                        } else {
+                            setErrorMessage(state.authMessage ?? "Could not leave calendar.")
+                        }
+                        pendingCalendarLeave = nil
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingCalendarLeave = nil
+            }
+        } message: {
+            Text(
+                pendingCalendarLeave.map { "Are you sure you want to leave \"\($0.name)\"?" }
+                    ?? "Are you sure you want to leave this calendar?"
+            )
+        }
+        .alert(
+            "Delete calendar permanently?",
+            isPresented: Binding(
+                get: { pendingCalendarDeletion != nil },
+                set: { isPresented in
+                    if !isPresented { pendingCalendarDeletion = nil }
+                }
+            ),
+            presenting: pendingCalendarDeletion
+        ) { calendar in
+            Button("Delete Calendar", role: .destructive) {
+                Task {
+                    let success = await state.deleteCalendar(calendarId: calendar.id)
+                    if success {
+                        setSuccessMessage("Calendar deleted permanently.")
+                    } else {
+                        setErrorMessage(state.authMessage ?? "Could not delete calendar.")
+                    }
+                    pendingCalendarDeletion = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingCalendarDeletion = nil
+            }
+        } message: { calendar in
+            Text("Are you sure you want to delete \"\(calendar.name)\"? This cannot be reversed.")
+        }
+    }
+
+    private var calendar: PlannerCalendar? {
+        state.calendars.first(where: { $0.id == calendarId })
+    }
+
+    @ViewBuilder
+    private var messageSection: some View {
+        if let calendarActionMessage {
+            Section {
+                CalendarActionMessageView(
+                    message: calendarActionMessage,
+                    isError: calendarActionMessageIsError
+                )
+            }
+        }
+    }
+
+    private var missingCalendarSection: some View {
+        Section {
+            Text("This calendar is no longer available.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func calendarDetailSections(for calendar: PlannerCalendar) -> some View {
+        Section {
+            Button {
+                Task { await setAsCurrent(calendar) }
+            } label: {
+                HStack {
+                    Text("Set as current view")
+                    Spacer()
+                    if isCurrent(calendar) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.planBlue)
+                    }
+                }
+            }
+            .accessibilityIdentifier("settings.calendars.setCurrent")
+
+            Button {
+                Task { await setAsDefault(calendar) }
+            } label: {
+                HStack {
+                    Text("Set as default calendar")
+                    Spacer()
+                    if isDefault(calendar) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Color.planBlue)
+                    }
+                }
+            }
+            .accessibilityIdentifier("settings.calendars.setDefault")
+        } header: {
+            Text("Use this calendar")
+        }
+
+        Section {
+            LabeledContent("Share code", value: calendar.shareCode)
+
+            ShareLink(item: inviteShareText(for: calendar)) {
+                Label("Share invite code", systemImage: "square.and.arrow.up")
+            }
+
+            Button {
+                copyShareCode(calendar.shareCode)
+                setSuccessMessage("Share code copied.")
+            } label: {
+                Label("Copy invite code", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                qrInviteCalendar = calendar
+            } label: {
+                Label("Show invite QR code", systemImage: "qrcode")
+            }
+        } header: {
+            Text("Invite & Share")
+        } footer: {
+            Text("Shared calendars support up to \(calendar.maxMembers) collaborators.")
+        }
+
+        Section {
+            if isOwner(calendar) {
+                Button("Rename calendar") {
+                    showingRenameCalendarSheet = true
+                }
+                .accessibilityIdentifier("settings.calendars.rename.open")
+
+                Button(role: .destructive) {
+                    pendingCalendarDeletion = calendar
+                } label: {
+                    Label("Delete calendar", systemImage: "trash")
+                }
+                .accessibilityIdentifier("settings.calendars.delete")
+            } else {
+                Button(role: .destructive) {
+                    pendingCalendarLeave = calendar
+                } label: {
+                    Label("Leave calendar", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+                .accessibilityIdentifier("settings.calendars.leave")
+            }
+        } header: {
+            Text("Manage calendar")
+        } footer: {
+            if isOwner(calendar) {
+                Text("Deleting a calendar removes its events and protections for all members.")
+            } else {
+                Text("Leaving removes this calendar from your account but keeps it available for other members.")
+            }
+        }
+    }
+
+    private func isCurrent(_ calendar: PlannerCalendar) -> Bool {
+        state.selectedCalendarId == calendar.id
+    }
+
+    private func isDefault(_ calendar: PlannerCalendar) -> Bool {
+        state.defaultCalendarId == calendar.id
+    }
+
+    private func isOwner(_ calendar: PlannerCalendar) -> Bool {
+        guard let currentUserId = state.session?.user.id.uuidString.lowercased() else { return false }
+        return calendar.ownerUserId.lowercased() == currentUserId
+    }
+
+    private func setAsCurrent(_ calendar: PlannerCalendar) async {
+        if isCurrent(calendar) {
+            setSuccessMessage("\"\(calendar.name)\" is already the current view.")
+            return
+        }
+        await state.switchCalendar(to: calendar.id)
+        setSuccessMessage("Now viewing \"\(calendar.name)\".")
+    }
+
+    private func setAsDefault(_ calendar: PlannerCalendar) async {
+        if isDefault(calendar) {
+            setSuccessMessage("\"\(calendar.name)\" is already the default calendar.")
+            return
+        }
+        await state.setDefaultCalendar(calendarId: calendar.id)
+        setSuccessMessage("Default calendar set to \"\(calendar.name)\".")
+    }
+
+    private func setSuccessMessage(_ message: String) {
+        calendarActionMessage = message
+        calendarActionMessageIsError = false
+    }
+
+    private func setErrorMessage(_ message: String) {
+        calendarActionMessage = message
+        calendarActionMessageIsError = true
     }
 
     private func inviteShareText(for calendar: PlannerCalendar) -> String {
@@ -652,6 +864,273 @@ struct CalendarSettingsView: View {
 
         In the app, go to Settings -> Join shared calendar and paste this code.
         """
+    }
+}
+
+struct CreateCalendarSheetView: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var calendarActionMessage: String?
+    @Binding var calendarActionMessageIsError: Bool
+
+    @State private var calendarName = ""
+    @State private var isSubmitting = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Calendar name") {
+                    TextField("New calendar name", text: $calendarName)
+                        .textInputAutocapitalization(.words)
+                }
+
+                Section {
+                    Button("Create calendar") {
+                        Task { await createCalendar() }
+                    }
+                    .disabled(trimmedCalendarName.isEmpty || isSubmitting || state.isLoading)
+                    .accessibilityIdentifier("settings.calendars.create")
+                }
+            }
+            .weekendSettingsListStyle()
+            .navigationTitle("Create Calendar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private var trimmedCalendarName: String {
+        calendarName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func createCalendar() async {
+        guard !trimmedCalendarName.isEmpty else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        let success = await state.createCalendar(name: trimmedCalendarName)
+        if success {
+            calendarActionMessage = "Calendar created."
+            calendarActionMessageIsError = false
+            dismiss()
+        } else {
+            calendarActionMessage = state.authMessage ?? "Could not create calendar."
+            calendarActionMessageIsError = true
+        }
+    }
+}
+
+struct JoinCalendarSheetView: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var calendarActionMessage: String?
+    @Binding var calendarActionMessageIsError: Bool
+
+    @State private var joinCalendarCode = ""
+    @State private var isSubmitting = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Share code") {
+                    TextField("Join with share code", text: $joinCalendarCode)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .onChange(of: joinCalendarCode) { _, value in
+                            let normalized = value.uppercased()
+                            if normalized != value {
+                                joinCalendarCode = normalized
+                            }
+                        }
+                }
+
+                Section {
+                    Button("Join shared calendar") {
+                        Task { await joinCalendar() }
+                    }
+                    .disabled(trimmedJoinCode.isEmpty || isSubmitting || state.isLoading)
+                    .accessibilityIdentifier("settings.calendars.join")
+                }
+            }
+            .weekendSettingsListStyle()
+            .navigationTitle("Join Calendar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private var trimmedJoinCode: String {
+        joinCalendarCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private func joinCalendar() async {
+        guard !trimmedJoinCode.isEmpty else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        let success = await state.joinCalendar(shareCode: trimmedJoinCode)
+        if success {
+            calendarActionMessage = "Joined shared calendar."
+            calendarActionMessageIsError = false
+            dismiss()
+        } else {
+            calendarActionMessage = state.authMessage ?? "Could not join calendar."
+            calendarActionMessageIsError = true
+        }
+    }
+}
+
+struct RenameCalendarSheetView: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let calendar: PlannerCalendar
+    @Binding var calendarActionMessage: String?
+    @Binding var calendarActionMessageIsError: Bool
+
+    @State private var calendarName: String
+    @State private var isSubmitting = false
+
+    init(
+        calendar: PlannerCalendar,
+        calendarActionMessage: Binding<String?>,
+        calendarActionMessageIsError: Binding<Bool>
+    ) {
+        self.calendar = calendar
+        self._calendarActionMessage = calendarActionMessage
+        self._calendarActionMessageIsError = calendarActionMessageIsError
+        self._calendarName = State(initialValue: calendar.name)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("New name") {
+                    TextField("Calendar name", text: $calendarName)
+                        .textInputAutocapitalization(.words)
+                }
+
+                Section {
+                    Button("Save name") {
+                        Task { await renameCalendar() }
+                    }
+                    .disabled(!canSave || isSubmitting || state.isLoading)
+                    .accessibilityIdentifier("settings.calendars.rename")
+                }
+            }
+            .weekendSettingsListStyle()
+            .navigationTitle("Rename Calendar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private var trimmedCalendarName: String {
+        calendarName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var canSave: Bool {
+        !trimmedCalendarName.isEmpty && trimmedCalendarName != calendar.name
+    }
+
+    private func renameCalendar() async {
+        guard canSave else {
+            dismiss()
+            return
+        }
+
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        let success = await state.renameCalendar(calendarId: calendar.id, to: trimmedCalendarName)
+        if success {
+            calendarActionMessage = "Calendar renamed."
+            calendarActionMessageIsError = false
+            dismiss()
+        } else {
+            calendarActionMessage = state.authMessage ?? "Could not rename calendar."
+            calendarActionMessageIsError = true
+        }
+    }
+}
+
+private struct CalendarSettingsCalendarRow: View {
+    let calendar: PlannerCalendar
+    let roleLabel: String
+    let membersLabel: String
+    let isCurrent: Bool
+    let isDefault: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(calendar.name)
+                    .foregroundStyle(.primary)
+
+                if isCurrent {
+                    calendarBadge(text: "Current", color: Color.planBlue)
+                }
+
+                if isDefault {
+                    calendarBadge(text: "Default", color: Color.freeGreen)
+                }
+            }
+
+            Text("\(roleLabel) • \(membersLabel)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func calendarBadge(text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.15))
+            .clipShape(Capsule())
+    }
+}
+
+private struct CalendarActionMessageView: View {
+    let message: String
+    let isError: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isError ? Color.protectedRed : Color.freeGreen)
+                .padding(.top, 1)
+
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
     }
 }
 

@@ -1,0 +1,85 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+
+const supportEmail = 'support@theweekend.org.uk';
+const pageTitle = 'Terms of Use | The Weekend';
+const description = 'Terms of Use for The Weekend website and mobile app services.';
+---
+
+<MainLayout title={pageTitle} description={description}>
+  <section class="panel">
+    <p class="kicker">Terms of Use</p>
+    <h1>The Weekend Terms</h1>
+    <p>Last updated: February 21, 2026</p>
+    <p>
+      These Terms govern your use of The Weekend services, including the iOS app and support website.
+      By using the service, you agree to these terms.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>1. Eligibility and account use</h2>
+    <ul class="list-clean">
+      <li>You are responsible for account credentials and activity under your account.</li>
+      <li>You agree to provide accurate information and maintain account security.</li>
+      <li>You must not use the service for unlawful, abusive, or harmful conduct.</li>
+    </ul>
+  </section>
+
+  <section class="section panel">
+    <h2>2. Acceptable use</h2>
+    <p>You agree not to:</p>
+    <ul class="list-clean">
+      <li>Attempt unauthorized access to service infrastructure or other users' data.</li>
+      <li>Interfere with normal service operation or abuse shared collaboration features.</li>
+      <li>Upload malicious content or exploit vulnerabilities.</li>
+    </ul>
+  </section>
+
+  <section class="section panel">
+    <h2>3. User content and ownership</h2>
+    <p>
+      You retain rights to content you submit, subject to the rights needed to operate the service.
+      Shared calendar features may expose planner content to collaborators you invite.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>4. Service availability</h2>
+    <p>
+      We work to provide reliable service but do not guarantee uninterrupted availability.
+      Features may change, be improved, or be removed based on product needs.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>5. Disclaimer and limitation</h2>
+    <p>
+      Service is provided on an "as is" and "as available" basis to the fullest extent permitted by law.
+      To the extent permitted by law, The Weekend is not liable for indirect, incidental, or consequential damages.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>6. Termination</h2>
+    <p>
+      You may stop using the service at any time.
+      You may permanently delete your account in-app via Settings -> Account -> Delete account.
+      We may suspend or terminate access for serious policy violations or legal requirements.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>7. Governing law</h2>
+    <p>
+      Unless otherwise required, these Terms are governed by applicable law in your operating jurisdiction.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <h2>8. Contact</h2>
+    <p>
+      Questions about these Terms: <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+    </p>
+  </section>
+</MainLayout>

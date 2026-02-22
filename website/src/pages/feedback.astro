@@ -1,0 +1,98 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+
+const pageTitle = 'Feedback | The Weekend';
+const description = 'Send support questions, bug reports, and feature requests to The Weekend team.';
+---
+
+<MainLayout title={pageTitle} description={description}>
+  <section class="panel">
+    <p class="kicker">Feedback</p>
+    <h1>Support, issues, and feature requests</h1>
+    <p>
+      Use this form to contact the team without exposing a personal email address.
+      Choose a category so your message is triaged correctly.
+    </p>
+  </section>
+
+  <section class="section panel">
+    <form
+      class="feedback-form"
+      name="feedback"
+      method="POST"
+      action="/feedback/success"
+      data-netlify="true"
+      netlify-honeypot="bot-field"
+    >
+      <input type="hidden" name="form-name" value="feedback" />
+      <p class="hidden">
+        <label>
+          Do not fill this field if you are human.
+          <input name="bot-field" autocomplete="off" />
+        </label>
+      </p>
+
+      <div class="field-grid">
+        <label>
+          Category*
+          <select name="category" required>
+            <option value="">Select one</option>
+            <option value="support">Support</option>
+            <option value="bug">Bug report</option>
+            <option value="feature">Feature request</option>
+          </select>
+        </label>
+
+        <label>
+          Subject*
+          <input type="text" name="subject" required maxlength="120" placeholder="Short summary" />
+        </label>
+      </div>
+
+      <label>
+        Message*
+        <textarea
+          name="message"
+          required
+          minlength="12"
+          maxlength="5000"
+          placeholder="What happened, what you expected, and any useful context."
+        ></textarea>
+      </label>
+
+      <div class="field-grid">
+        <label>
+          Your name (optional)
+          <input type="text" name="name" maxlength="90" />
+        </label>
+
+        <label>
+          Contact email (optional)
+          <input type="email" name="email" maxlength="180" placeholder="Only if you want a reply" />
+        </label>
+      </div>
+
+      <div class="field-grid">
+        <label>
+          App version (optional)
+          <input type="text" name="app_version" maxlength="40" placeholder="Example: 1.2.0 (45)" />
+        </label>
+
+        <label>
+          Device / iOS (optional)
+          <input type="text" name="device" maxlength="80" placeholder="Example: iPhone 16, iOS 26.2" />
+        </label>
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" name="consent" required value="yes" />
+        <span>I understand this submission will be used to respond to support or product feedback.</span>
+      </label>
+
+      <div class="cta-row">
+        <button class="btn btn-primary" type="submit">Send message</button>
+        <a class="btn btn-secondary" href="/support">Open support page</a>
+      </div>
+    </form>
+  </section>
+</MainLayout>

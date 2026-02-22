@@ -1,0 +1,63 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site ?? 'https://www.theweekend.org.uk').toString();
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <link rel="canonical" href={canonical} />
+  </head>
+  <body>
+    <script is:inline>
+      (() => {
+        const url = new URL(window.location.href);
+        const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
+        if (normalizedPath.startsWith('/reset-password')) return;
+
+        const search = url.searchParams;
+        const hash = new URLSearchParams(url.hash.replace(/^#/, ''));
+        const recoveryType = hash.get('type') ?? search.get('type');
+        if (recoveryType !== 'recovery') return;
+
+        const hasRecoveryToken =
+          hash.has('access_token') ||
+          hash.has('refresh_token') ||
+          search.has('code') ||
+          search.has('token_hash');
+        if (!hasRecoveryToken) return;
+
+        const target = new URL('/reset-password', url.origin);
+        target.search = url.search;
+        target.hash = url.hash;
+        window.location.replace(target.toString());
+      })();
+    </script>
+    <div class="site-shell">
+      <SiteNav />
+      <main>
+        <div class="container">
+          <slot />
+        </div>
+      </main>
+      <SiteFooter />
+    </div>
+  </body>
+</html>

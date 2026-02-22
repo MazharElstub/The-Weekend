@@ -1,13 +1,30 @@
 import Foundation
+import OSLog
 import UserNotifications
 
-enum NotificationRouteAction {
+enum NotificationRouteAction: Equatable {
     case openWeekend(String)
     case addPlan(String)
+    case openPlanner(message: String?)
+}
+
+enum NotificationPayloadType: String, Equatable {
+    case summary = "summary"
+    case planningNudge = "planning-nudge"
+    case event = "event"
+    case sundayWrapUp = "sunday-wrap-up"
+    case mondayRecap = "monday-recap"
+    case unknown = "unknown"
+}
+
+struct NotificationTapDecision: Equatable {
+    let routeAction: NotificationRouteAction?
+    let payloadType: NotificationPayloadType
+    let fallbackReason: String?
 }
 
 final class NotificationService: NSObject {
-    static let shared = NotificationService()
+    static let shared = NotificationService(autoConfigure: false)
 
     private let center: UNUserNotificationCenter
     private let calendar: Calendar
@@ -29,6 +46,14 @@ final class NotificationService: NSObject {
     private let routeStateLock = NSLock()
     private var routeHandler: ((NotificationRouteAction) -> Void)?
     private var pendingRoutes: [NotificationRouteAction] = []
+    private let configurationLock = NSLock()
+    private var hasConfigured = false
+
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "WeekendPlannerIOS",
+        category: "NotificationRouting"
+    )
+    private let fallbackMessage = "That notification is no longer actionable. Opening Planner instead."
 
     private let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -37,11 +62,30 @@ final class NotificationService: NSObject {
         return formatter
     }()
 
-    init(center: UNUserNotificationCenter = .current(), calendar: Calendar = .current) {
+    init(
+        center: UNUserNotificationCenter = .current(),
+        calendar: Calendar = .current,
+        autoConfigure: Bool = true
+    ) {
         self.center = center
         self.calendar = calendar
         super.init()
-        self.center.delegate = self
+        if autoConfigure {
+            configureIfNeeded()
+        }
+    }
+
+    func configureIfNeeded() {
+        var shouldConfigure = false
+        configurationLock.lock()
+        if !hasConfigured {
+            hasConfigured = true
+            shouldConfigure = true
+        }
+        configurationLock.unlock()
+
+        guard shouldConfigure else { return }
+        center.delegate = self
         registerNotificationActions()
     }
 
@@ -553,12 +597,20 @@ final class NotificationService: NSObject {
 
     private func emitRoute(_ route: NotificationRouteAction) {
         var handler: ((NotificationRouteAction) -> Void)?
+        var bufferedRoute = false
         routeStateLock.lock()
         handler = routeHandler
         if handler == nil {
             pendingRoutes.append(route)
+            bufferedRoute = true
         }
         routeStateLock.unlock()
+
+        if bufferedRoute {
+            logger.log(
+                "Buffered notification route while app state initializes: route=\(self.routeDescription(for: route), privacy: .public)"
+            )
+        }
 
         guard let handler else { return }
         DispatchQueue.main.async {
@@ -566,8 +618,146 @@ final class NotificationService: NSObject {
         }
     }
 
+    func resolveTapDecision(
+        requestIdentifier: String,
+        userInfo: [AnyHashable: Any],
+        actionIdentifier: String,
+        upcomingWeekendKeyProvider: () -> String? = { CalendarHelper.nextUpcomingWeekendKey() }
+    ) -> NotificationTapDecision {
+        let payloadType = payloadType(from: userInfo, requestIdentifier: requestIdentifier)
+        guard let intent = navigationIntent(
+            for: actionIdentifier,
+            payloadType: payloadType
+        ) else {
+            return NotificationTapDecision(
+                routeAction: nil,
+                payloadType: payloadType,
+                fallbackReason: nil
+            )
+        }
+
+        let validWeekendKey = weekendKey(from: userInfo).flatMap(sanitizedWeekendKey(_:))
+        switch intent {
+        case .addPlan:
+            if let validWeekendKey {
+                return NotificationTapDecision(
+                    routeAction: .addPlan(validWeekendKey),
+                    payloadType: payloadType,
+                    fallbackReason: nil
+                )
+            }
+            if let fallbackWeekend = upcomingWeekendKeyProvider().flatMap(sanitizedWeekendKey(_:)) {
+                return NotificationTapDecision(
+                    routeAction: .addPlan(fallbackWeekend),
+                    payloadType: payloadType,
+                    fallbackReason: "missing-weekend-key-used-next-upcoming"
+                )
+            }
+            return NotificationTapDecision(
+                routeAction: .openPlanner(message: fallbackMessage),
+                payloadType: payloadType,
+                fallbackReason: "missing-weekend-key-no-fallback-weekend"
+            )
+        case .openWeekend:
+            if let validWeekendKey {
+                return NotificationTapDecision(
+                    routeAction: .openWeekend(validWeekendKey),
+                    payloadType: payloadType,
+                    fallbackReason: nil
+                )
+            }
+            return NotificationTapDecision(
+                routeAction: .openPlanner(message: fallbackMessage),
+                payloadType: payloadType,
+                fallbackReason: "missing-weekend-key-opened-planner"
+            )
+        }
+    }
+
+    private enum NotificationTapIntent {
+        case openWeekend
+        case addPlan
+    }
+
+    private func navigationIntent(
+        for actionIdentifier: String,
+        payloadType: NotificationPayloadType
+    ) -> NotificationTapIntent? {
+        switch actionIdentifier {
+        case actionAddPlanIdentifier:
+            return .addPlan
+        case actionOpenIdentifier:
+            return .openWeekend
+        case UNNotificationDefaultActionIdentifier:
+            if payloadType == .planningNudge {
+                return .addPlan
+            }
+            return .openWeekend
+        default:
+            return nil
+        }
+    }
+
+    private func payloadType(
+        from userInfo: [AnyHashable: Any],
+        requestIdentifier: String
+    ) -> NotificationPayloadType {
+        if let type = userInfo["type"] as? String {
+            switch type {
+            case NotificationPayloadType.summary.rawValue:
+                return .summary
+            case NotificationPayloadType.planningNudge.rawValue:
+                return .planningNudge
+            case NotificationPayloadType.event.rawValue:
+                return .event
+            case NotificationPayloadType.sundayWrapUp.rawValue:
+                return .sundayWrapUp
+            case NotificationPayloadType.mondayRecap.rawValue:
+                return .mondayRecap
+            default:
+                return .unknown
+            }
+        }
+
+        if requestIdentifier == summaryIdentifier {
+            return .summary
+        }
+        if requestIdentifier == nudgeIdentifier {
+            return .planningNudge
+        }
+        if requestIdentifier == sundayWrapUpIdentifier {
+            return .sundayWrapUp
+        }
+        if requestIdentifier == mondayRecapIdentifier {
+            return .mondayRecap
+        }
+        if requestIdentifier.hasPrefix(eventIdentifierPrefix) {
+            return .event
+        }
+        return .unknown
+    }
+
     private func weekendKey(from userInfo: [AnyHashable: Any]) -> String? {
         userInfo["weekendKey"] as? String
+    }
+
+    private func sanitizedWeekendKey(_ weekendKey: String) -> String? {
+        let trimmed = weekendKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, CalendarHelper.parseKey(trimmed) != nil else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private func routeDescription(for route: NotificationRouteAction) -> String {
+        switch route {
+        case .openWeekend(let weekendKey):
+            return "openWeekend(\(weekendKey))"
+        case .addPlan(let weekendKey):
+            return "addPlan(\(weekendKey))"
+        case .openPlanner(let message):
+            return "openPlanner(\(message ?? "nil"))"
+        }
     }
 
     private func mutableContentCopy(from content: UNNotificationContent) -> UNMutableNotificationContent {
@@ -617,15 +807,33 @@ extension NotificationService: UNUserNotificationCenterDelegate {
             return
         }
 
-        guard let weekendKey = weekendKey(from: request.content.userInfo) else { return }
+        await MainActor.run { [self] in
+            let decision = resolveTapDecision(
+                requestIdentifier: request.identifier,
+                userInfo: request.content.userInfo,
+                actionIdentifier: response.actionIdentifier
+            )
+            guard let route = decision.routeAction else {
+                logger.log(
+                    "Notification tap ignored: requestId=\(request.identifier, privacy: .public) action=\(response.actionIdentifier, privacy: .public)"
+                )
+                return
+            }
+            emitRoute(route)
 
-        switch response.actionIdentifier {
-        case actionAddPlanIdentifier:
-            emitRoute(.addPlan(weekendKey))
-        case actionOpenIdentifier, UNNotificationDefaultActionIdentifier:
-            emitRoute(.openWeekend(weekendKey))
-        default:
-            break
+            if decision.payloadType == .unknown {
+                logger.warning(
+                    "Notification payload type unknown: requestId=\(request.identifier, privacy: .public) action=\(response.actionIdentifier, privacy: .public)"
+                )
+            }
+            if let fallbackReason = decision.fallbackReason {
+                logger.warning(
+                    "Notification tap fallback: reason=\(fallbackReason, privacy: .public) requestId=\(request.identifier, privacy: .public) action=\(response.actionIdentifier, privacy: .public)"
+                )
+            }
+            logger.log(
+                "Notification tap resolved: requestId=\(request.identifier, privacy: .public) action=\(response.actionIdentifier, privacy: .public) payload=\(decision.payloadType.rawValue, privacy: .public) destination=\(self.routeDescription(for: route), privacy: .public) fallback=\(decision.fallbackReason ?? "none", privacy: .public)"
+            )
         }
     }
 }

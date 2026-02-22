@@ -1,0 +1,55 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+
+const supportEmail = 'support@theweekend.org.uk';
+const pageTitle = 'Support | The Weekend';
+const description = 'Support resources for The Weekend, including troubleshooting, account help, and contact options.';
+---
+
+<MainLayout title={pageTitle} description={description}>
+  <section class="panel">
+    <p class="kicker">Support</p>
+    <h1>Help with The Weekend</h1>
+    <p>
+      Use this page for troubleshooting, account help, and App Store review support references.
+      For direct contact, email <a href={`mailto:${supportEmail}`}>{supportEmail}</a>.
+    </p>
+    <div class="callout">
+      Primary support channel: <strong><a href="/feedback">Feedback form</a></strong>.
+      You can choose Support, Bug Report, or Feature Request in one place.
+    </div>
+  </section>
+
+  <section class="section panel-grid" aria-label="Support FAQs">
+    <article class="panel">
+      <h2>Password reset</h2>
+      <ol class="list-clean">
+        <li>Open the iOS app sign-in screen.</li>
+        <li>Tap <strong>Forgot password?</strong>.</li>
+        <li>Use the reset link from your email to set a new password.</li>
+        <li>Return to the app and sign in with the new password.</li>
+      </ol>
+      <p><a href="/reset-password">Open reset page</a></p>
+    </article>
+
+    <article class="panel">
+      <h2>Account deletion path</h2>
+      <p>
+        The app supports permanent account deletion in-app.
+        Path: <strong>Settings -> Account -> Delete account</strong>.
+      </p>
+      <p>
+        Deletion options for owned shared calendars are provided before final confirmation.
+      </p>
+    </article>
+
+  </section>
+
+  <section class="section panel">
+    <h2>Contact options</h2>
+    <ul class="list-clean">
+      <li>Feedback form: <a href="/feedback">/feedback</a></li>
+      <li>Email: <a href={`mailto:${supportEmail}`}>{supportEmail}</a></li>
+    </ul>
+  </section>
+</MainLayout>
