@@ -6,6 +6,7 @@ import UIKit
 enum SettingsDestination: Hashable {
     case account
     case calendars
+    case calendarSyncSharing
     case notifications
     case offDays
     case personalReminders
@@ -71,6 +72,8 @@ struct SettingsHomeView: View {
                     AccountSettingsView()
                 case .calendars:
                     CalendarSettingsView()
+                case .calendarSyncSharing:
+                    CalendarSyncSharingSettingsView()
                 case .notifications:
                     NotificationSettingsView()
                 case .offDays:
@@ -153,6 +156,15 @@ struct SettingsHomeView: View {
                         action: nil
                     ),
                     SettingsHomeRow(
+                        id: "calendar-sync-sharing",
+                        destination: .calendarSyncSharing,
+                        icon: "arrow.trianglehead.2.clockwise.rotate.90.icloud",
+                        title: "Calendar Sync & Sharing",
+                        subtitle: calendarSyncSharingSubtitle,
+                        accessibilityIdentifier: nil,
+                        action: nil
+                    ),
+                    SettingsHomeRow(
                         id: "notifications",
                         destination: .notifications,
                         icon: "bell.badge",
@@ -181,7 +193,7 @@ struct SettingsHomeView: View {
                         destination: .dataPrivacy,
                         icon: "lock.shield",
                         title: "Data & Privacy",
-                        subtitle: "Calendar access: \(state.calendarPermissionState.label)",
+                        subtitle: "Privacy controls, permissions, and diagnostics",
                         accessibilityIdentifier: nil,
                         action: nil
                     )
@@ -286,6 +298,17 @@ struct SettingsHomeView: View {
         let protection = state.protectionMode == .block ? "Block protected weekends" : "Warn on protected weekends"
         let countdownTimeZone = state.countdownTimeZoneIdentifier == nil ? "System countdown time" : "Custom countdown time"
         return "\(theme) • \(protection) • \(countdownTimeZone)"
+    }
+
+    private var calendarSyncSharingSubtitle: String {
+        let access = state.calendarPermissionState.canReadEvents ? "Access on" : "Access off"
+        let importLabel = state.calendarImportSettings.isEnabled ? "Import on" : "Import off"
+        let exportLabel = state.calendarImportSettings.exportNewPlansByDefault ? "Export default on" : "Export default off"
+        let reviewCount = state.pendingImportReviewCount
+        let reviewLabel = reviewCount == 0
+            ? "No reviews"
+            : "\(reviewCount) review\(reviewCount == 1 ? "" : "s")"
+        return "\(access) • \(importLabel) • \(exportLabel) • \(reviewLabel)"
     }
 
     private var offDaysSubtitle: String {
@@ -1458,6 +1481,25 @@ struct OffDaysSettingsView: View {
         state.annualLeaveDays.sorted { $0.dateKey < $1.dateKey }
     }
 
+    private var annualLeaveGroups: [AnnualLeaveRangeSummary] {
+        state.annualLeaveRangeSummaries()
+    }
+
+    private var annualLeaveEligibleDates: [Date] {
+        state.annualLeaveEligibleDates(from: annualLeaveStartDate, to: annualLeaveEndDate)
+    }
+
+    private var annualLeaveRangeDayCount: Int {
+        let calendar = CalendarHelper.calendar
+        let normalizedStart = calendar.startOfDay(for: min(annualLeaveStartDate, annualLeaveEndDate))
+        let normalizedEnd = calendar.startOfDay(for: max(annualLeaveStartDate, annualLeaveEndDate))
+        return (calendar.dateComponents([.day], from: normalizedStart, to: normalizedEnd).day ?? 0) + 1
+    }
+
+    private var annualLeaveSkippedDayCount: Int {
+        max(0, annualLeaveRangeDayCount - annualLeaveEligibleDates.count)
+    }
+
     var body: some View {
         List {
             Section {
@@ -1520,23 +1562,30 @@ struct OffDaysSettingsView: View {
                 Text("Automatic uses your iPhone region. You can override to another supported region.")
             }
 
-            Section("Annual leave") {
-                if annualLeaveRows.isEmpty {
+            Section {
+                if annualLeaveGroups.isEmpty {
                     Text("No annual leave days added.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(annualLeaveRows) { leave in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(formattedAnnualLeaveDate(leave.dateKey))
-                                .foregroundStyle(.primary)
-                            if !leave.note.isEmpty {
-                                Text(leave.note)
+                    ForEach(annualLeaveGroups) { group in
+                        NavigationLink {
+                            AnnualLeaveRangeDetailView(group: group)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(formattedAnnualLeaveRange(group))
+                                    .foregroundStyle(.primary)
+                                Text("\(group.dateKeys.count) working day\(group.dateKeys.count == 1 ? "" : "s")")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if !group.note.isEmpty {
+                                    Text(group.note)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
-                    .onDelete(perform: deleteAnnualLeaveDays)
+                    .onDelete(perform: deleteAnnualLeaveGroups)
                 }
 
                 Button("Add annual leave range") {
@@ -1546,6 +1595,10 @@ struct OffDaysSettingsView: View {
                     annualLeaveNote = ""
                     showAddAnnualLeave = true
                 }
+            } header: {
+                Text("Annual leave")
+            } footer: {
+                Text("Pick a start and end date. Only working days are added automatically, so weekends and public holidays are skipped.")
             }
 
         }
@@ -1566,6 +1619,10 @@ struct OffDaysSettingsView: View {
                             .foregroundStyle(.secondary)
                         LabeledContent("Start", value: formattedDate(annualLeaveStartDate))
                         LabeledContent("End", value: formattedDate(annualLeaveEndDate))
+                        LabeledContent("Working days to add", value: "\(annualLeaveEligibleDates.count)")
+                        if annualLeaveSkippedDayCount > 0 {
+                            LabeledContent("Skipped", value: "\(annualLeaveSkippedDayCount)")
+                        }
                     }
 
                     Section("Details") {
@@ -1590,16 +1647,17 @@ struct OffDaysSettingsView: View {
                             )
                             showAddAnnualLeave = false
                         }
+                        .disabled(annualLeaveEligibleDates.isEmpty)
                     }
                 }
             }
         }
     }
 
-    private func deleteAnnualLeaveDays(at offsets: IndexSet) {
+    private func deleteAnnualLeaveGroups(at offsets: IndexSet) {
         for index in offsets {
-            guard annualLeaveRows.indices.contains(index) else { continue }
-            state.removeAnnualLeaveDay(annualLeaveRows[index].dateKey)
+            guard annualLeaveGroups.indices.contains(index) else { continue }
+            state.removeAnnualLeaveDays(annualLeaveGroups[index].dateKeys)
         }
     }
 
@@ -1608,8 +1666,63 @@ struct OffDaysSettingsView: View {
         return Self.annualLeaveDateFormatter.string(from: date)
     }
 
+    private func formattedAnnualLeaveRange(_ group: AnnualLeaveRangeSummary) -> String {
+        if group.startDateKey == group.endDateKey {
+            return formattedAnnualLeaveDate(group.startDateKey)
+        }
+        return "\(formattedAnnualLeaveDate(group.startDateKey)) - \(formattedAnnualLeaveDate(group.endDateKey))"
+    }
+
     private func formattedDate(_ date: Date) -> String {
         Self.annualLeaveDateFormatter.string(from: date)
+    }
+}
+
+private struct AnnualLeaveRangeDetailView: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let group: AnnualLeaveRangeSummary
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
+    var body: some View {
+        List {
+            Section("Range") {
+                LabeledContent("Start", value: formattedDate(group.startDateKey))
+                LabeledContent("End", value: formattedDate(group.endDateKey))
+                LabeledContent("Working days", value: "\(group.dateKeys.count)")
+                if !group.note.isEmpty {
+                    LabeledContent("Note", value: group.note)
+                }
+            }
+
+            Section("Included dates") {
+                ForEach(group.dateKeys, id: \.self) { dateKey in
+                    Text(formattedDate(dateKey))
+                }
+            }
+
+            Section {
+                Button("Remove this range", role: .destructive) {
+                    state.removeAnnualLeaveDays(group.dateKeys)
+                    dismiss()
+                }
+            }
+        }
+        .weekendSettingsListStyle()
+        .navigationTitle("Annual Leave")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func formattedDate(_ key: String) -> String {
+        guard let date = CalendarHelper.parseKey(key) else { return key }
+        return Self.dateFormatter.string(from: date)
     }
 }
 
@@ -2134,77 +2247,20 @@ struct DataPrivacySettingsView: View {
 
     var body: some View {
         List {
-            Section("Permissions & Integrations") {
-                LabeledContent("Status", value: state.calendarPermissionState.label)
+            Section {
+                LabeledContent("Calendar access", value: state.calendarPermissionState.label)
 
-                if state.calendarPermissionState == .notDetermined {
-                    Button("Enable calendar access") {
-                        Task { await state.requestCalendarPermissionIfNeeded() }
-                    }
-                }
-
-                if state.calendarPermissionState == .denied || state.calendarPermissionState == .restricted {
-                    Button("Open iOS Settings") {
-                        openSystemSettings()
-                    }
-                }
-
-                Toggle(
-                    "Enable calendar import sync",
-                    isOn: Binding(
-                        get: { state.calendarImportSettings.isEnabled },
-                        set: { enabled in
-                            Task { await state.setCalendarImportEnabled(enabled) }
-                        }
+                NavigationLink(value: SettingsDestination.calendarSyncSharing) {
+                    SettingsNavRow(
+                        icon: "arrow.trianglehead.2.clockwise.rotate.90.icloud",
+                        title: "Calendar Sync & Sharing",
+                        subtitle: "Import, Apple Calendar export defaults, and import review"
                     )
-                )
-                .disabled(!state.calendarPermissionState.canReadEvents)
-
-                if state.calendarPermissionState.canReadEvents, state.calendarImportSettings.isEnabled {
-                    if state.availableExternalCalendars.isEmpty {
-                        Text("No device calendars available.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(state.availableExternalCalendars) { calendar in
-                            Button {
-                                state.toggleImportedSourceCalendar(calendar.id)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Circle()
-                                        .fill(color(for: calendar.colorHex))
-                                        .frame(width: 8, height: 8)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(calendar.title)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.primary)
-                                        Text(calendar.sourceTitle)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if !calendar.allowsWrites {
-                                        Text("Read-only")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Image(systemName: state.isImportedSourceCalendarSelected(calendar.id) ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(state.isImportedSourceCalendarSelected(calendar.id) ? Color.planBlue : Color.secondary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-
-                    LabeledContent("Last sync", value: state.calendarImportLastSyncLabel)
-                    Button("Import now") {
-                        Task { await state.reconcileImportedCalendarEvents(trigger: .manual) }
-                    }
                 }
-
-                Text("Used for conflict checks, optional Apple Calendar export, and weekend import from calendars connected to this device.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Permissions")
+            } footer: {
+                Text("Calendar connectivity settings now live in a dedicated planning screen.")
             }
 
             Section {
@@ -2230,17 +2286,262 @@ struct DataPrivacySettingsView: View {
             state.scheduleSyncFlush(reason: "settings-data-privacy")
         }
     }
+}
 
-    private func color(for hex: String) -> Color {
-        let cleaned = hex.replacingOccurrences(of: "#", with: "")
-        guard cleaned.count == 6, let value = Int(cleaned, radix: 16) else {
-            return .secondary
+struct CalendarSyncSharingSettingsView: View {
+    @EnvironmentObject private var state: AppState
+    @State private var isRunningManualImport = false
+    @State private var manualImportFeedback: CalendarImportRunResult?
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("Calendar access", value: state.calendarPermissionState.label)
+
+                if state.calendarPermissionState == .notDetermined {
+                    Button("Enable calendar access") {
+                        Task { await state.requestCalendarPermissionIfNeeded() }
+                    }
+                }
+
+                if state.calendarPermissionState == .denied || state.calendarPermissionState == .restricted {
+                    Button("Open iOS Settings") {
+                        openSystemSettings()
+                    }
+                }
+            } header: {
+                Text("Access")
+            } footer: {
+                Text("Calendar access is used for device-calendar import, conflict checks, and Apple Calendar export.")
+            }
+
+            Section {
+                Toggle(
+                    "Enable calendar import sync",
+                    isOn: Binding(
+                        get: { state.calendarImportSettings.isEnabled },
+                        set: { enabled in
+                            Task { await state.setCalendarImportEnabled(enabled) }
+                        }
+                    )
+                )
+                .disabled(!state.calendarPermissionState.canReadEvents)
+
+                if state.calendarPermissionState.canReadEvents, state.calendarImportSettings.isEnabled {
+                    if state.availableExternalCalendars.isEmpty {
+                        Text("No device calendars available.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(state.availableExternalCalendars) { calendar in
+                            Button {
+                                state.toggleImportedSourceCalendar(calendar.id)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Circle()
+                                        .fill(calendarColor(for: calendar.colorHex))
+                                        .frame(width: 8, height: 8)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(calendar.title)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.primary)
+                                        Text(calendar.sourceTitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if !calendar.allowsWrites {
+                                        Text("Read-only")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Image(systemName: state.isImportedSourceCalendarSelected(calendar.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(state.isImportedSourceCalendarSelected(calendar.id) ? Color.planBlue : Color.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    LabeledContent("Last sync", value: state.calendarImportLastSyncLabel)
+                    Button("Import now") {
+                        isRunningManualImport = true
+                        manualImportFeedback = nil
+                        Task {
+                            let result = await state.reconcileImportedCalendarEvents(trigger: .manual)
+                            manualImportFeedback = result
+                            isRunningManualImport = false
+                        }
+                    }
+                    .disabled(isRunningManualImport)
+
+                    if isRunningManualImport {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Importing calendar events...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let manualImportFeedback {
+                        Label {
+                            Text(manualImportFeedback.message)
+                                .font(.caption)
+                        } icon: {
+                            Image(systemName: manualImportFeedback.didSucceed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        }
+                        .foregroundStyle(manualImportFeedback.didSucceed ? Color.green : Color.orange)
+                    }
+                }
+            } header: {
+                Text("Import from Device Calendars")
+            } footer: {
+                Text("Choose which device calendars feed Weekend Planner. Mixed working/off-day imports will pause for review.")
+            }
+
+            Section {
+                Toggle(
+                    "Export new plans to Apple Calendar by default",
+                    isOn: Binding(
+                        get: { state.calendarImportSettings.exportNewPlansByDefault },
+                        set: { state.setExportNewPlansByDefault($0) }
+                    )
+                )
+                .disabled(!state.calendarPermissionState.canWriteEvents)
+
+                if !state.calendarPermissionState.canWriteEvents {
+                    Text("Enable calendar access to turn on default export.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Export to Apple Calendar")
+            } footer: {
+                Text("You can still override Apple Calendar export for each plan when you add or edit it.")
+            }
+
+            Section {
+                if state.pendingImportReviewItems.isEmpty {
+                    Text("No imports need review right now.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(state.pendingImportReviewItems) { review in
+                        NavigationLink {
+                            CalendarImportReviewDetailView(reviewID: review.id)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(review.title)
+                                    .foregroundStyle(.primary)
+                                Text(importReviewSubtitle(review))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Imports Needing Review")
+            } footer: {
+                Text("Review imports that span both working and non-working days before the app creates or updates plans.")
+            }
         }
-        let red = Double((value >> 16) & 0xFF) / 255.0
-        let green = Double((value >> 8) & 0xFF) / 255.0
-        let blue = Double(value & 0xFF) / 255.0
-        return Color(red: red, green: green, blue: blue)
+        .weekendSettingsListStyle()
+        .navigationTitle("Calendar Sync & Sharing")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await state.refreshCalendarPermissionState()
+            await state.refreshAvailableExternalCalendars()
+            state.scheduleSyncFlush(reason: "settings-calendar-sync-sharing")
+        }
     }
+
+    private func importReviewSubtitle(_ review: CalendarImportReviewItem) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        let start = formatter.string(from: review.startDate)
+        let end = formatter.string(from: review.endDate)
+        return "\(start) - \(end) • \(review.workingDayDateKeys.count) working day\(review.workingDayDateKeys.count == 1 ? "" : "s") need a decision"
+    }
+}
+
+struct CalendarImportReviewDetailView: View {
+    @EnvironmentObject private var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let reviewID: String
+
+    var body: some View {
+        List {
+            if let review {
+                Section("Source event") {
+                    LabeledContent("Title", value: review.title)
+                    LabeledContent("Calendar", value: review.sourceCalendarTitle)
+                    LabeledContent("Source", value: review.sourceSourceTitle)
+                    LabeledContent("Dates", value: sourceDateRangeText(for: review))
+                }
+
+                Section("Current import behaviour") {
+                    Text("This event includes both off-days and working days. Weekend Planner is pausing import until you choose how to handle it.")
+                        .foregroundStyle(.secondary)
+                    LabeledContent("Off-days already covered", value: review.offDayDateKeys.count == 0 ? "None" : review.offDayDateKeys.joined(separator: ", "))
+                    LabeledContent("Working days to review", value: review.workingDayDateKeys.count == 0 ? "None" : review.workingDayDateKeys.joined(separator: ", "))
+                }
+
+                Section("Choose an action") {
+                    Button("Import off-days only") {
+                        state.resolveImportReview(review.id, action: .importOffDaysOnly)
+                        dismiss()
+                    }
+                    Button("Add annual leave and import full span") {
+                        state.resolveImportReview(review.id, action: .addAnnualLeaveAndImportFullSpan)
+                        dismiss()
+                    }
+                    Button("Ignore this source event", role: .destructive) {
+                        state.resolveImportReview(review.id, action: .ignoreSourceEvent)
+                        dismiss()
+                    }
+                }
+
+                Section("Helpful shortcuts") {
+                    Button("Open Life Schedule") {
+                        state.openSettingsDestination(.offDays)
+                    }
+                    Button("Create manually") {
+                        state.openImportReviewCreateManually(review.id)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .weekendSettingsListStyle()
+        .navigationTitle("Import Review")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var review: CalendarImportReviewItem? {
+        state.importReviewItem(id: reviewID)
+    }
+
+    private func sourceDateRangeText(for review: CalendarImportReviewItem) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        let start = formatter.string(from: review.startDate)
+        let end = formatter.string(from: review.endDate)
+        return "\(start) - \(end)"
+    }
+}
+
+private func calendarColor(for hex: String) -> Color {
+    let cleaned = hex.replacingOccurrences(of: "#", with: "")
+    guard cleaned.count == 6, let value = Int(cleaned, radix: 16) else {
+        return .secondary
+    }
+    let red = Double((value >> 16) & 0xFF) / 255.0
+    let green = Double((value >> 8) & 0xFF) / 255.0
+    let blue = Double(value & 0xFF) / 255.0
+    return Color(red: red, green: green, blue: blue)
 }
 
 struct AdvancedDiagnosticsSettingsView: View {

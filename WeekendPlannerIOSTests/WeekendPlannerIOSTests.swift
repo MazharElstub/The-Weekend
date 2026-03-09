@@ -96,6 +96,87 @@ struct WeekendPlannerIOSTests {
 
     @Test
     @MainActor
+    func annualLeaveRangeSkipsWeekendAndPublicHolidayDates() {
+        let state = AppState()
+        resetAnnualLeaveContext(state)
+        state.weekendConfiguration = WeekendConfiguration(
+            weekendDays: [.sat, .sun],
+            includeFridayEvening: false,
+            fridayEveningStartHour: 17,
+            fridayEveningStartMinute: 0,
+            includePublicHolidays: true,
+            publicHolidayRegionPreference: .uk
+        )
+
+        state.addAnnualLeaveRange(
+            from: makeDate(year: 2026, month: 1, day: 1),
+            to: makeDate(year: 2026, month: 1, day: 4),
+            note: "New Year break"
+        )
+
+        #expect(state.annualLeaveDays.map(\.dateKey) == ["2026-01-02"])
+    }
+
+    @Test
+    @MainActor
+    func annualLeavePillAlwaysUsesAnnualLeaveLabel() {
+        let state = AppState()
+        resetAnnualLeaveContext(state)
+        state.addAnnualLeaveDay(makeDate(year: 2026, month: 2, day: 18), note: "Test Holiday")
+
+        let pills = state.holidayInfoPills(for: "2026-02-21", day: .wed, events: [])
+        let labels = pills.map(\.label)
+
+        #expect(labels.contains("Annual Leave"))
+        #expect(!labels.contains("Test Holiday"))
+    }
+
+    @Test
+    @MainActor
+    func annualLeaveRangeSummaries_GroupContiguousDaysIntoSingleSummary() {
+        let state = AppState()
+        resetAnnualLeaveContext(state)
+        state.addAnnualLeaveRange(
+            from: makeDate(year: 2026, month: 2, day: 18),
+            to: makeDate(year: 2026, month: 2, day: 20),
+            note: "Trip"
+        )
+
+        let groups = state.annualLeaveRangeSummaries()
+
+        #expect(groups.count == 1)
+        #expect(groups.first?.startDateKey == "2026-02-18")
+        #expect(groups.first?.endDateKey == "2026-02-20")
+        #expect(groups.first?.dateKeys == ["2026-02-18", "2026-02-19", "2026-02-20"])
+    }
+
+    @Test
+    @MainActor
+    func annualLeaveRangeSummaries_KeepSingleRangeAcrossSkippedHolidayGap() {
+        let state = AppState()
+        resetAnnualLeaveContext(state)
+        state.weekendConfiguration = WeekendConfiguration(
+            weekendDays: [.sat, .sun],
+            includeFridayEvening: false,
+            fridayEveningStartHour: 17,
+            fridayEveningStartMinute: 0,
+            includePublicHolidays: true,
+            publicHolidayRegionPreference: .uk
+        )
+        state.addAnnualLeaveRange(
+            from: makeDate(year: 2026, month: 1, day: 1),
+            to: makeDate(year: 2026, month: 1, day: 2),
+            note: "New Year"
+        )
+
+        let groups = state.annualLeaveRangeSummaries()
+
+        #expect(groups.count == 1)
+        #expect(groups.first?.dateKeys == ["2026-01-02"])
+    }
+
+    @Test
+    @MainActor
     func tuesdayWednesdayWeekend_AssociatesAdjacentMondayToCurrentWindow() {
         let state = AppState()
         resetAnnualLeaveContext(state)
@@ -878,6 +959,19 @@ struct WeekendPlannerIOSTests {
     }
 
     @Test
+    @MainActor
+    func openCalendarSyncSharingDestination_SelectsSettingsTabAndPendingPath() {
+        let state = AppState()
+        state.selectedTab = .overview
+        state.pendingSettingsPath = []
+
+        state.openSettingsDestination(.calendarSyncSharing)
+
+        #expect(state.selectedTab == .settings)
+        #expect(state.pendingSettingsPath == [.calendarSyncSharing])
+    }
+
+    @Test
     func daySelectionRulesAllowSingleDaySelection() {
         let options = makeOffDayOptions([.fri, .sat, .sun])
         let selection: Set<WeekendDay> = [.sat]
@@ -989,14 +1083,142 @@ struct WeekendPlannerIOSTests {
 
     @Test
     @MainActor
-    func conflictAcknowledgementTransitionsPendingState() {
+    func acceptConflictTransitionsPendingState() {
         let state = AppState()
         let eventID = "imported-event"
         state.importConflicts[eventID] = .pending
 
-        state.acknowledgeConflict(eventId: eventID)
+        state.acceptConflict(eventId: eventID)
 
-        #expect(state.importConflictState(for: eventID) == .acknowledged)
+        #expect(state.importConflictState(for: eventID) == .accepted)
+    }
+
+    @Test
+    func importConflictState_DecodesLegacyAcknowledgedValueAsAccepted() throws {
+        let decoded = try JSONDecoder().decode(
+            ImportConflictState.self,
+            from: Data("\"acknowledged\"".utf8)
+        )
+
+        #expect(decoded == .accepted)
+    }
+
+    @Test
+    @MainActor
+    func calendarImportReviewCandidate_CreatesPendingReviewForMixedWorkingAndOffDayEvent() {
+        let state = AppState()
+        let sourceEvent = ExternalCalendarEvent(
+            sourceCalendarID: "device-calendar",
+            sourceEventID: "event-1",
+            sourceCalendarTitle: "Work",
+            sourceSourceTitle: "iCloud",
+            title: "Half-term trip",
+            startDate: makeDate(year: 2026, month: 2, day: 13),
+            endDate: makeDate(year: 2026, month: 2, day: 17),
+            allDay: true,
+            lastModified: makeDate(year: 2026, month: 1, day: 1)
+        )
+
+        let review = state.importReviewCandidate(for: sourceEvent, allowsWrites: true)
+
+        #expect(review != nil)
+        #expect(review?.status == .pending)
+        #expect(review?.weekendKey == "2026-02-14")
+        #expect(review?.offDayPlannerDays == [WeekendDay.sat.rawValue, WeekendDay.sun.rawValue])
+        #expect(review?.fullSpanPlannerDays == [WeekendDay.fri.rawValue, WeekendDay.sat.rawValue, WeekendDay.sun.rawValue, WeekendDay.mon.rawValue])
+        #expect(review?.workingDayDateKeys == ["2026-02-13", "2026-02-16"])
+    }
+
+    @Test
+    @MainActor
+    func calendarImportReviewCandidate_ReturnsNilForCleanWeekendEvent() {
+        let state = AppState()
+        let sourceEvent = ExternalCalendarEvent(
+            sourceCalendarID: "device-calendar",
+            sourceEventID: "event-2",
+            sourceCalendarTitle: "Trips",
+            sourceSourceTitle: "iCloud",
+            title: "Weekend away",
+            startDate: makeDate(year: 2026, month: 2, day: 14),
+            endDate: makeDate(year: 2026, month: 2, day: 16),
+            allDay: true,
+            lastModified: makeDate(year: 2026, month: 1, day: 1)
+        )
+
+        let review = state.importReviewCandidate(for: sourceEvent, allowsWrites: true)
+
+        #expect(review == nil)
+    }
+
+    @Test
+    @MainActor
+    func resolveImportReview_IgnoreMarksReviewIgnored() {
+        let state = AppState()
+        let review = CalendarImportReviewItem(
+            sourceCalendarID: "device-calendar",
+            sourceEventID: "event-3",
+            sourceCalendarTitle: "Trips",
+            sourceSourceTitle: "iCloud",
+            title: "Holiday",
+            startDate: makeDate(year: 2026, month: 2, day: 13),
+            endDate: makeDate(year: 2026, month: 2, day: 17),
+            allDay: true,
+            lastModified: makeDate(year: 2026, month: 1, day: 1),
+            sourceFingerprint: "fingerprint",
+            sourceCalendarAllowsWrites: true,
+            weekendKey: "2026-02-14",
+            offDayPlannerDays: [WeekendDay.sat.rawValue, WeekendDay.sun.rawValue],
+            fullSpanPlannerDays: [WeekendDay.fri.rawValue, WeekendDay.sat.rawValue, WeekendDay.sun.rawValue, WeekendDay.mon.rawValue],
+            offDayDateKeys: ["2026-02-14", "2026-02-15"],
+            workingDayDateKeys: ["2026-02-13", "2026-02-16"],
+            status: .pending,
+            resolution: nil,
+            createdAt: makeDate(year: 2026, month: 1, day: 1),
+            updatedAt: makeDate(year: 2026, month: 1, day: 1)
+        )
+        state.importReviewItems = [review]
+
+        state.resolveImportReview(review.id, action: .ignoreSourceEvent)
+
+        #expect(state.importReviewItems.first?.status == .ignored)
+        #expect(state.importReviewItems.first?.resolution == .ignoreSourceEvent)
+    }
+
+    @Test
+    func calendarImportSettings_DefaultExportToCalendarIsDisabled() {
+        #expect(!CalendarImportSettings.defaults.exportNewPlansByDefault)
+    }
+
+    @Test
+    @MainActor
+    func reconcileImportedCalendarEvents_DisabledSyncReturnsHelpfulMessage() async {
+        let state = AppState()
+        state.calendarImportSettings = .defaults
+
+        let result = await state.reconcileImportedCalendarEvents(trigger: .manual)
+
+        #expect(!result.didSucceed)
+        #expect(result.message == "Calendar import sync is turned off.")
+    }
+
+    @Test
+    @MainActor
+    func reconcileImportedCalendarEvents_RequiresSignedInSession() async {
+        let state = AppState()
+        state.calendarImportSettings = CalendarImportSettings(
+            isEnabled: true,
+            selectedSourceCalendarIDs: ["device-calendar"],
+            lastSyncAt: nil,
+            syncWindowDaysPast: 30,
+            syncWindowDaysFuture: 120,
+            exportNewPlansByDefault: false
+        )
+        state.calendarPermissionState = .fullAccess
+
+        let result = await state.reconcileImportedCalendarEvents(trigger: .manual)
+
+        #expect(!result.didSucceed)
+        #expect(result.message == "Sign in to import calendar events.")
     }
 
     @Test
@@ -1561,7 +1783,7 @@ struct WeekendPlannerIOSTests {
 
         state.importConflicts = ["event-1": .pending]
         #expect(state.hasPendingImportConflict(weekendKey: "2026-03-14"))
-        state.importConflicts = ["event-1": .acknowledged]
+        state.importConflicts = ["event-1": .accepted]
         #expect(!state.hasPendingImportConflict(weekendKey: "2026-03-14"))
 
         state.quickAddChips = [

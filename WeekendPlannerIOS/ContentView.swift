@@ -15,6 +15,7 @@ enum PageEdgeLayoutContract {
     static let settingsAccountContainerID = "settings.account.container"
     static let plannerWeekendCardIDPrefix = "planner.weekend.card."
     static let plannerInterCardReminderRowIDPrefix = "planner.intercard.reminder.row."
+    static let rootTabHorizontalPadding: CGFloat = 12
     static let frameAlignmentTolerance: CGFloat = 1.0
 }
 
@@ -31,7 +32,7 @@ struct RootView: View {
             AppGradientBackground()
             TabView(selection: $state.selectedTab) {
                 NavigationStack {
-                    tabListLayout(showLegend: true) {
+                    tabScrollLayout(showLegend: true) {
                         OverviewView(
                             onSelectWeekend: { key in
                                 detailSelection = WeekendSelection(id: key)
@@ -56,7 +57,7 @@ struct RootView: View {
                 }
 
                 NavigationStack {
-                    tabListLayout {
+                    tabScrollLayout {
                         WeekendView(onSelectWeekend: { key in
                             detailSelection = WeekendSelection(id: key)
                         })
@@ -178,22 +179,30 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func tabListLayout<Content: View>(
+    private func tabScrollLayout<Content: View>(
         showLegend: Bool = false,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        List {
-            if showLegend {
-                LegendView()
-                    .accessibilityIdentifier(PageEdgeLayoutContract.dashboardLegendContainerID)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+        ZStack {
+            AppSurfaceStyle.settingsGroupBackground
+                .ignoresSafeArea()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if showLegend {
+                        LegendView()
+                            .accessibilityIdentifier(PageEdgeLayoutContract.dashboardLegendContainerID)
+                    }
+
+                    content()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, PageEdgeLayoutContract.rootTabHorizontalPadding)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
             }
-            content()
-                .listRowSeparator(.hidden)
-                .listRowBackground(Color.clear)
+            .scrollIndicators(.hidden)
         }
-        .weekendTabListStyle()
     }
 
     private func handleTabSwipe(_ value: DragGesture.Value) {
@@ -1237,7 +1246,6 @@ struct MonthDisplayView: View {
                                 events: weekendEvents,
                                 isProtected: state.isProtected(key),
                                 hasWeekendNote: state.hasWeekendNote(weekendKey: key),
-                                hasPendingConflict: state.hasPendingImportConflict(weekendKey: key),
                                 onTap: { onSelectWeekend(key) },
                                 onDuplicateEvent: { event in
                                     guard let targetWeekendKey = CalendarHelper.nextWeekendKey(after: event.weekendKey) else { return }
@@ -1251,8 +1259,14 @@ struct MonthDisplayView: View {
                                 syncStateForEvent: { event in state.syncState(for: event.id) },
                                 isImportedEvent: { event in state.isImportedEvent(event.id) },
                                 conflictStateForEvent: { event in state.importConflictState(for: event.id) },
-                                onAcknowledgeConflict: { event in
-                                    state.acknowledgeConflict(eventId: event.id)
+                                shouldShowImportConflictNotice: { day, event in
+                                    state.isPrimaryPlannerDisplayDay(day, for: event)
+                                },
+                                overlapEventsForImportedEvent: { event in
+                                    state.importConflictOverlaps(forImportedEventID: event.id)
+                                },
+                                onAcceptConflict: { event in
+                                    state.acceptConflict(eventId: event.id)
                                 }
                             )
 
@@ -1434,14 +1448,15 @@ struct WeekendRowView: View {
     let events: [WeekendEvent]
     let isProtected: Bool
     let hasWeekendNote: Bool
-    let hasPendingConflict: Bool
     var onTap: () -> Void
     var onDuplicateEvent: (WeekendEvent) -> Void
     var onRemoveEvent: (WeekendEvent) -> Void
     var syncStateForEvent: (WeekendEvent) -> SyncState
     var isImportedEvent: (WeekendEvent) -> Bool
     var conflictStateForEvent: (WeekendEvent) -> ImportConflictState
-    var onAcknowledgeConflict: (WeekendEvent) -> Void
+    var shouldShowImportConflictNotice: (WeekendDay, WeekendEvent) -> Bool
+    var overlapEventsForImportedEvent: (WeekendEvent) -> [WeekendEvent]
+    var onAcceptConflict: (WeekendEvent) -> Void
     @State private var eventToRemove: WeekendEvent?
     @State private var eventToEdit: WeekendEvent?
 
@@ -1480,7 +1495,9 @@ struct WeekendRowView: View {
                         syncStateForEvent: syncStateForEvent,
                         isImportedEvent: isImportedEvent,
                         conflictStateForEvent: conflictStateForEvent,
-                        onAcknowledgeConflict: onAcknowledgeConflict,
+                        shouldShowImportConflictNotice: shouldShowImportConflictNotice,
+                        overlapEventsForImportedEvent: overlapEventsForImportedEvent,
+                        onAcceptConflict: onAcceptConflict,
                         onDeleteReminderPill: { pill in
                             state.dismissHolidayInfoPill(pill)
                         }
@@ -1557,15 +1574,6 @@ struct WeekendRowView: View {
                 .background(AppSurfaceStyle.settingsChipBackground)
                 .clipShape(Circle())
                 .accessibilityLabel("Weekend note available")
-        }
-        if hasPendingConflict {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.orange)
-                .padding(6)
-                .background(AppSurfaceStyle.settingsChipBackground)
-                .clipShape(Circle())
-                .accessibilityLabel("Conflict needs review")
         }
     }
 
@@ -1655,7 +1663,9 @@ struct DayColumnView: View {
     var syncStateForEvent: (WeekendEvent) -> SyncState
     var isImportedEvent: (WeekendEvent) -> Bool
     var conflictStateForEvent: (WeekendEvent) -> ImportConflictState
-    var onAcknowledgeConflict: (WeekendEvent) -> Void
+    var shouldShowImportConflictNotice: (WeekendDay, WeekendEvent) -> Bool
+    var overlapEventsForImportedEvent: (WeekendEvent) -> [WeekendEvent]
+    var onAcceptConflict: (WeekendEvent) -> Void
     var onDeleteReminderPill: (HolidayInfoPill) -> Void = { _ in }
 
     var body: some View {
@@ -1687,11 +1697,13 @@ struct DayColumnView: View {
                             syncState: syncStateForEvent(event),
                             isImported: isImportedEvent(event),
                             importConflictState: conflictStateForEvent(event),
+                            showsImportConflictNotice: shouldShowImportConflictNotice(day, event),
+                            overlappingEvents: overlapEventsForImportedEvent(event),
                             onEdit: { onEdit(event) },
                             onMove: { onMove(event) },
                             onDuplicate: { onDuplicate(event) },
                             onRemove: { onRemove(event) },
-                            onAcknowledgeConflict: { onAcknowledgeConflict(event) }
+                            onAcceptConflict: { onAcceptConflict(event) }
                         )
 
                         if index < events.count - 1 {
@@ -1912,16 +1924,19 @@ private struct BetweenWeekendReminderPillsView: View {
 
 struct TimelineItemView: View {
     @State private var showingSyncStatusInfo = false
+    @State private var showingImportConflictReview = false
     let event: WeekendEvent
     let syncState: SyncState
     let isImported: Bool
     let importConflictState: ImportConflictState
+    let showsImportConflictNotice: Bool
+    let overlappingEvents: [WeekendEvent]
     var onSelect: (() -> Void)? = nil
     var onEdit: () -> Void
     var onMove: () -> Void
     var onDuplicate: () -> Void
     var onRemove: () -> Void
-    var onAcknowledgeConflict: () -> Void
+    var onAcceptConflict: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1938,23 +1953,6 @@ struct TimelineItemView: View {
                 }
 
                 HStack(spacing: 8) {
-                    if importConflictState == .pending {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.orange)
-                            .frame(width: 22, height: 22)
-                            .background(Color.orange.opacity(0.14))
-                            .clipShape(Circle())
-                            .accessibilityLabel("Conflict pending")
-                    } else if importConflictState == .acknowledged {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.secondary)
-                            .frame(width: 22, height: 22)
-                            .background(Color.secondary.opacity(0.12))
-                            .clipShape(Circle())
-                            .accessibilityLabel("Conflict acknowledged")
-                    }
                     if syncState != .synced {
                         Button {
                             showingSyncStatusInfo = true
@@ -1989,9 +1987,14 @@ struct TimelineItemView: View {
                         if importConflictState == .pending {
                             Divider()
                             Button {
-                                onAcknowledgeConflict()
+                                showingImportConflictReview = true
                             } label: {
-                                Label("Acknowledge conflict warning", systemImage: "checkmark.circle")
+                                Label("Review import warning", systemImage: "info.circle")
+                            }
+                            Button {
+                                onAcceptConflict()
+                            } label: {
+                                Label("Keep this import anyway", systemImage: "checkmark.circle")
                             }
                         }
                         Divider()
@@ -2018,6 +2021,16 @@ struct TimelineItemView: View {
         } message: {
             Text(syncStatusAlertMessage)
         }
+        .sheet(isPresented: $showingImportConflictReview) {
+            ImportConflictReviewSheet(
+                event: event,
+                overlappingEvents: overlappingEvents,
+                onAcceptConflict: {
+                    onAcceptConflict()
+                    showingImportConflictReview = false
+                }
+            )
+        }
     }
 
     private var eventSummary: some View {
@@ -2033,13 +2046,30 @@ struct TimelineItemView: View {
                     .foregroundColor(.secondary)
                 Text(event.title)
                     .font(.subheadline.weight(.medium))
-                if isImported {
-                    Label("Imported", systemImage: "arrow.down.circle")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .labelStyle(.iconOnly)
-                        .padding(.leading, 2)
-                        .accessibilityLabel("Imported calendar event")
+                HStack(spacing: 6) {
+                    if isImported {
+                        Label("Imported", systemImage: "arrow.down.circle")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .labelStyle(.iconOnly)
+                            .padding(.leading, 2)
+                            .accessibilityLabel("Imported calendar event")
+                    }
+                    if showsImportConflictNotice, importConflictState == .pending {
+                        Button {
+                            showingImportConflictReview = true
+                        } label: {
+                            Label(conflictChipLabel, systemImage: "info.circle")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.orange.opacity(0.12))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Review imported plan warning")
+                    }
                 }
             }
 
@@ -2063,6 +2093,10 @@ struct TimelineItemView: View {
             return "All day"
         }
         return "\(formatTime(event.startTime)) - \(formatTime(event.endTime))"
+    }
+
+    private var conflictChipLabel: String {
+        overlappingEvents.isEmpty ? "Needs review" : "Overlaps other plans"
     }
 
     private var syncLabel: String {
@@ -2112,6 +2146,78 @@ struct TimelineItemView: View {
     }
 }
 
+private struct ImportConflictReviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let event: WeekendEvent
+    let overlappingEvents: [WeekendEvent]
+    let onAcceptConflict: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Imported plan") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(event.title)
+                            .font(.headline)
+                        Text(summaryLabel(for: event))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section {
+                    if overlappingEvents.isEmpty {
+                        Text("This imported plan still has a warning attached, but no active overlap is currently detected.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(overlappingEvents) { overlappingEvent in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(overlappingEvent.title)
+                                    .font(.body.weight(.medium))
+                                Text(summaryLabel(for: overlappingEvent))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text(overlappingEvents.isEmpty ? "Current issue" : "Overlapping plans")
+                } footer: {
+                    Text("If this warning is expected, keep the import and the notice will stay hidden unless the source event changes later.")
+                }
+
+                Section {
+                    Button("Keep this import anyway") {
+                        onAcceptConflict()
+                    }
+                    .foregroundStyle(.primary)
+                }
+            }
+            .navigationTitle("Review import warning")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func summaryLabel(for event: WeekendEvent) -> String {
+        let daySummary = event.dayValues
+            .sorted { $0.plannerRowSortOrder < $1.plannerRowSortOrder }
+            .map(\.label)
+            .joined(separator: ", ")
+        let timeSummary = event.isAllDay ? "All day" : "\(event.startTime) - \(event.endTime)"
+        return [daySummary, timeSummary]
+            .filter { !$0.isEmpty }
+            .joined(separator: " • ")
+    }
+}
+
 struct WeekendDetailsView: View {
     @EnvironmentObject private var state: AppState
     let weekendKey: String
@@ -2123,7 +2229,6 @@ struct WeekendDetailsView: View {
     @State private var eventToEdit: WeekendEvent?
     @State private var selectedEventForDetails: WeekendEvent?
     @State private var showAddProtectedPrompt = false
-    @State private var carryForwardResultMessage: String?
     @State private var weekendNoteDraft = ""
     @State private var savedWeekendNoteDraft = ""
     @State private var selectedDetent: PresentationDetent = .large
@@ -2195,7 +2300,13 @@ struct WeekendDetailsView: View {
                             syncStateForEvent: { event in state.syncState(for: event.id) },
                             isImportedEvent: { event in state.isImportedEvent(event.id) },
                             conflictStateForEvent: { event in state.importConflictState(for: event.id) },
-                            onAcknowledgeConflict: { event in state.acknowledgeConflict(eventId: event.id) },
+                            shouldShowImportConflictNotice: { day, event in
+                                state.isPrimaryPlannerDisplayDay(day, for: event)
+                            },
+                            overlapEventsForImportedEvent: { event in
+                                state.importConflictOverlaps(forImportedEventID: event.id)
+                            },
+                            onAcceptConflict: { event in state.acceptConflict(eventId: event.id) },
                             onDeleteReminderPill: { pill in
                                 state.dismissHolidayInfoPill(pill)
                             }
@@ -2267,21 +2378,6 @@ struct WeekendDetailsView: View {
                         foreground: AppSurfaceStyle.primaryButtonForeground
                     )
                 )
-
-                if let nextWeekendKey = CalendarHelper.nextWeekendKey(after: weekendKey) {
-                    Button("Move incomplete plans to next weekend") {
-                        Task {
-                            let count = await state.carryForwardIncompleteEvents(
-                                fromWeekendKey: weekendKey,
-                                toWeekendKey: nextWeekendKey
-                            )
-                            carryForwardResultMessage = count == 0
-                                ? "No incomplete plans were moved."
-                                : "\(count) plan\(count == 1 ? "" : "s") moved to next weekend."
-                        }
-                    }
-                    .buttonStyle(OutlinePillButtonStyle(stroke: AppSurfaceStyle.cardStroke, foreground: .primary))
-                }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2347,14 +2443,6 @@ struct WeekendDetailsView: View {
                 description: state.eventDescription(for: event.id)
             )
         }
-        .alert("Carry-forward result", isPresented: Binding(
-            get: { carryForwardResultMessage != nil },
-            set: { if !$0 { carryForwardResultMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(carryForwardResultMessage ?? "")
-        }
     }
 
     private func eventsFor(_ day: WeekendDay) -> [WeekendEvent] {
@@ -2403,7 +2491,9 @@ struct DayDetailColumn: View {
     var syncStateForEvent: (WeekendEvent) -> SyncState
     var isImportedEvent: (WeekendEvent) -> Bool
     var conflictStateForEvent: (WeekendEvent) -> ImportConflictState
-    var onAcknowledgeConflict: (WeekendEvent) -> Void
+    var shouldShowImportConflictNotice: (WeekendDay, WeekendEvent) -> Bool
+    var overlapEventsForImportedEvent: (WeekendEvent) -> [WeekendEvent]
+    var onAcceptConflict: (WeekendEvent) -> Void
     var onDeleteReminderPill: (HolidayInfoPill) -> Void = { _ in }
 
     var body: some View {
@@ -2441,6 +2531,8 @@ struct DayDetailColumn: View {
                             syncState: syncStateForEvent(event),
                             isImported: isImportedEvent(event),
                             importConflictState: conflictStateForEvent(event),
+                            showsImportConflictNotice: shouldShowImportConflictNotice(day, event),
+                            overlappingEvents: overlapEventsForImportedEvent(event),
                             onSelect: onSelect.map { selectEvent in
                                 { selectEvent(event) }
                             },
@@ -2448,7 +2540,7 @@ struct DayDetailColumn: View {
                             onMove: { onMove(event) },
                             onDuplicate: { onDuplicate(event) },
                             onRemove: { onRemove(event) },
-                            onAcknowledgeConflict: { onAcknowledgeConflict(event) }
+                            onAcceptConflict: { onAcceptConflict(event) }
                     )
                 }
             }
@@ -2900,6 +2992,7 @@ struct AddPlanView: View {
                 eventDescription = prefilledDetails
             }
         }
+        exportToCalendar = state.calendarImportSettings.exportNewPlansByDefault
         if selectedCalendarIDs.isEmpty {
             if let selected = state.selectedCalendarId {
                 selectedCalendarIDs = [selected]
