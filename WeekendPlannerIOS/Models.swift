@@ -1006,6 +1006,121 @@ private struct MarkNoticeReadRPCParams: Encodable {
     }
 }
 
+enum CalendarInviteLink {
+    private static let customScheme = "theweekend"
+    private static let joinHost = "join"
+    private static let websiteHosts: Set<String> = [
+        "theweekend.org.uk",
+        "www.theweekend.org.uk"
+    ]
+
+    static func url(forShareCode shareCode: String) -> URL? {
+        guard let normalizedCode = normalizedShareCode(from: shareCode) else { return nil }
+        var components = URLComponents()
+        components.scheme = customScheme
+        components.host = joinHost
+        components.queryItems = [URLQueryItem(name: "code", value: normalizedCode)]
+        return components.url
+    }
+
+    static func formattedShareCode(_ shareCode: String) -> String {
+        guard let normalizedCode = normalizedShareCode(from: shareCode) else {
+            return shareCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard normalizedCode.count > 4 else { return normalizedCode }
+        let midpoint = normalizedCode.index(normalizedCode.startIndex, offsetBy: 4)
+        return "\(normalizedCode[..<midpoint])-\(normalizedCode[midpoint...])"
+    }
+
+    static func normalizedShareCode(from rawValue: String) -> String? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let parsedFromURL = normalizedShareCode(from: URL(string: trimmed)) {
+            return parsedFromURL
+        }
+
+        let uppercase = trimmed.uppercased()
+        let tokens = codeTokens(from: uppercase)
+        if let exactToken = tokens.first(where: { $0.count == 8 }) {
+            return exactToken
+        }
+
+        if let codeLabelRange = uppercase.range(of: "CODE") {
+            let suffixTokens = codeTokens(from: String(uppercase[codeLabelRange.upperBound...]))
+            if let exactToken = suffixTokens.first(where: { $0.count == 8 }) {
+                return exactToken
+            }
+            if suffixTokens.count >= 2,
+               suffixTokens[0].count == 4,
+               suffixTokens[1].count == 4 {
+                return suffixTokens[0] + suffixTokens[1]
+            }
+        }
+
+        let compact = uppercase.unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+        return compact.count == 8 ? compact : nil
+    }
+
+    static func normalizedShareCode(from url: URL?) -> String? {
+        guard let url else { return nil }
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let scheme = components?.scheme?.lowercased()
+        let host = components?.host?.lowercased()
+
+        if scheme == customScheme, host == joinHost {
+            let rawCode = components?.queryItems?.first(where: { $0.name == "code" })?.value
+            return rawCode.flatMap { normalizedShareCode(fromRawCode: $0) }
+        }
+
+        if scheme == "https" || scheme == "http",
+           let host,
+           websiteHosts.contains(host),
+           components?.path.lowercased() == "/join" {
+            let rawCode = components?.queryItems?.first(where: { $0.name == "code" })?.value
+            return rawCode.flatMap { normalizedShareCode(fromRawCode: $0) }
+        }
+
+        return nil
+    }
+
+    private static func normalizedShareCode(fromRawCode rawCode: String) -> String? {
+        let compact = rawCode.uppercased().unicodeScalars
+            .filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init)
+            .joined()
+        return compact.count == 8 ? compact : nil
+    }
+
+    private static func codeTokens(from value: String) -> [String] {
+        value.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+}
+
+private struct JoinCalendarRPCParams: Encodable {
+    let pShareCode: String
+
+    enum CodingKeys: String, CodingKey {
+        case pShareCode = "p_share_code"
+    }
+}
+
+private struct JoinCalendarRPCResult: Decodable {
+    let calendarId: String
+    let calendarName: String
+    let membershipCreated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case calendarId = "calendar_id"
+        case calendarName = "calendar_name"
+        case membershipCreated = "membership_created"
+    }
+}
+
 enum NotificationPermissionState: String {
     case notDetermined
     case authorized
@@ -1723,6 +1838,8 @@ final class AppState: ObservableObject {
     @Published var pendingAddPlanInitialDate: Date?
     @Published var pendingAddPlanPrefill: AddPlanPrefill?
     @Published var pendingNotificationMessage: String?
+    @Published var pendingCalendarActionMessage: String?
+    @Published var pendingCalendarActionMessageIsError = false
     @Published var pendingSettingsPath: [SettingsDestination] = []
     private(set) var performanceSnapshot: PerformanceSnapshot = .empty
 
@@ -1797,6 +1914,7 @@ final class AppState: ObservableObject {
     private var lastForegroundHeavyRefreshAt: Date?
     private var deferredNotificationRoute: NotificationRouteAction?
     private var deferredSharePayloadId: UUID?
+    private var deferredCalendarInviteCode: String?
     private let bypassAuthSplashForUITests: Bool
     private let skipOnboardingForUITests: Bool
     private let forceOnboardingForUITests: Bool
@@ -2328,9 +2446,12 @@ final class AppState: ObservableObject {
         pendingAddPlanInitialDate = nil
         pendingAddPlanPrefill = nil
         pendingNotificationMessage = nil
+        pendingCalendarActionMessage = nil
+        pendingCalendarActionMessageIsError = false
         pendingSettingsPath = []
         deferredNotificationRoute = nil
         deferredSharePayloadId = nil
+        deferredCalendarInviteCode = nil
         lastAutomaticImportReconcileAt = nil
         lastForegroundHeavyRefreshAt = nil
         lastNotificationRescheduleSignature = nil
@@ -2405,6 +2526,7 @@ final class AppState: ObservableObject {
         await runInitialCalendarImport()
         replayDeferredNotificationRouteIfNeeded()
         replayDeferredSharePayloadIfNeeded()
+        await replayDeferredCalendarInviteIfNeeded()
         scheduleNotificationResync(reason: reason, immediate: true)
         scheduleSyncFlush(reason: reason, immediate: true)
     }
@@ -2513,61 +2635,118 @@ final class AppState: ObservableObject {
     }
 
     func joinCalendar(shareCode: String) async -> Bool {
-        guard let session else { return false }
-        let userId = normalizedUserId(for: session)
-        let normalizedCode = shareCode
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-        guard !normalizedCode.isEmpty else { return false }
-
-        do {
-            let calendarsByCode: [PlannerCalendar] = try await supabase
-                .from("planner_calendars")
-                .select("id,name,owner_user_id,share_code,max_members,created_at,updated_at")
-                .eq("share_code", value: normalizedCode)
-                .limit(1)
-                .execute()
-                .value
-            guard let target = calendarsByCode.first else {
-                authMessage = "No calendar found for code \(normalizedCode)."
-                return false
-            }
-
-            let existingMemberships: [CalendarMembership] = try await supabase
-                .from("calendar_members")
-                .select("id,calendar_id,user_id,role,created_at")
-                .eq("calendar_id", value: target.id)
-                .execute()
-                .value
-
-            if existingMemberships.contains(where: { $0.userId == userId }) {
-                await loadCalendars()
-                await switchCalendar(to: target.id)
-                return true
-            }
-
-            guard existingMemberships.count < target.maxMembers else {
-                authMessage = "This calendar is full. A maximum of \(target.maxMembers) members is allowed."
-                return false
-            }
-
-            let membership = NewCalendarMembership(
-                calendarId: target.id,
-                userId: userId,
-                role: "member"
-            )
-            _ = try await supabase
-                .from("calendar_members")
-                .insert(membership)
-                .execute()
-
-            await loadCalendars()
-            await switchCalendar(to: target.id)
-            return true
-        } catch {
-            authMessage = "Could not join calendar. \(error.localizedDescription)"
+        let normalizedCode = CalendarInviteLink.normalizedShareCode(from: shareCode)
+        guard let normalizedCode, !normalizedCode.isEmpty else {
+            authMessage = "Enter a valid share code or invite link."
             return false
         }
+
+        do {
+            _ = try await joinCalendarViaShareCode(normalizedCode)
+            authMessage = nil
+            return true
+        } catch {
+            authMessage = calendarJoinErrorMessage(from: error)
+            return false
+        }
+    }
+
+    private func joinCalendarViaShareCode(_ normalizedCode: String) async throws -> JoinCalendarRPCResult {
+        guard session != nil else {
+            throw NSError(
+                domain: "WeekendPlannerIOS.CalendarInvite",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "Sign in to join a shared calendar."]
+            )
+        }
+
+        let params = JoinCalendarRPCParams(pShareCode: normalizedCode)
+        let results: [JoinCalendarRPCResult] = try await supabase
+            .rpc("join_calendar_by_share_code", params: params)
+            .execute()
+            .value
+        guard let result = results.first else {
+            throw NSError(
+                domain: "WeekendPlannerIOS.CalendarInvite",
+                code: 404,
+                userInfo: [NSLocalizedDescriptionKey: "No calendar found for that invite."]
+            )
+        }
+
+        await loadCalendars()
+        await switchCalendar(to: result.calendarId)
+        return result
+    }
+
+    private func handleIncomingCalendarInviteCode(_ rawCode: String) {
+        guard let normalizedCode = CalendarInviteLink.normalizedShareCode(from: rawCode) else {
+            let message = "This calendar invite link is invalid."
+            authMessage = message
+            setPendingCalendarActionMessage(message, isError: true)
+            openSettingsDestination(.calendars)
+            return
+        }
+
+        guard !showAuthSplash, session != nil else {
+            deferredCalendarInviteCode = normalizedCode
+            authMessage = "Sign in to join this shared calendar."
+            return
+        }
+
+        openSettingsDestination(.calendars)
+        Task {
+            do {
+                let result = try await joinCalendarViaShareCode(normalizedCode)
+                authMessage = nil
+                setPendingCalendarActionMessage(
+                    result.membershipCreated
+                        ? "Joined \"\(result.calendarName)\"."
+                        : "Already connected to \"\(result.calendarName)\".",
+                    isError: false
+                )
+                pendingNotificationMessage = result.membershipCreated
+                    ? "Joined \"\(result.calendarName)\"."
+                    : "Already a member of \"\(result.calendarName)\"."
+            } catch {
+                let message = calendarJoinErrorMessage(from: error)
+                authMessage = message
+                setPendingCalendarActionMessage(message, isError: true)
+            }
+        }
+    }
+
+    private func replayDeferredCalendarInviteIfNeeded() async {
+        guard !showAuthSplash, session != nil, let deferredCalendarInviteCode else { return }
+        self.deferredCalendarInviteCode = nil
+        handleIncomingCalendarInviteCode(deferredCalendarInviteCode)
+    }
+
+    func consumePendingCalendarActionMessage() {
+        pendingCalendarActionMessage = nil
+        pendingCalendarActionMessageIsError = false
+    }
+
+    private func setPendingCalendarActionMessage(_ message: String, isError: Bool) {
+        pendingCalendarActionMessage = message
+        pendingCalendarActionMessageIsError = isError
+    }
+
+    private func calendarJoinErrorMessage(from error: Error) -> String {
+        let message = error.localizedDescription
+        let normalized = message.lowercased()
+
+        if normalized.contains("join_calendar_by_share_code")
+            && (normalized.contains("does not exist") || normalized.contains("permission denied")) {
+            return "Calendar sharing needs the latest server migration before invite joins will work."
+        }
+
+        if normalized.contains("column reference")
+            && normalized.contains("calendar_id")
+            && normalized.contains("ambiguous") {
+            return "Calendar sharing needs the latest invite-join server hotfix before this invite can be accepted."
+        }
+
+        return "Could not join calendar. \(message)"
     }
 
     func deleteCalendar(calendarId: String) async -> Bool {
@@ -4589,11 +4768,11 @@ final class AppState: ObservableObject {
                 authMessage = "Could not import this event into Weekend Planner."
             }
         case .addAnnualLeaveAndImportFullSpan:
-            for dateKey in review.workingDayDateKeys.sorted() {
-                guard let date = CalendarHelper.parseKey(dateKey) else { continue }
-                addAnnualLeaveDay(date, note: review.title)
-            }
             if upsertImportedEvent(from: review, usingPlannerDays: review.fullSpanPlannerDays) {
+                for dateKey in review.workingDayDateKeys.sorted() {
+                    guard let date = CalendarHelper.parseKey(dateKey) else { continue }
+                    addAnnualLeaveDay(date, note: review.title)
+                }
                 review.status = .resolved
                 review.resolution = action
             } else {
@@ -5470,7 +5649,24 @@ final class AppState: ObservableObject {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let scheme = components?.scheme?.lowercased()
         let host = components?.host?.lowercased()
-        guard scheme == "theweekend", host == "share" else {
+        guard scheme == "theweekend" else {
+            shareImportLogger.debug(
+                "Ignored URL with unsupported route: \(url.absoluteString, privacy: .public)"
+            )
+            return
+        }
+
+        if host == "join" {
+            let inviteCode = components?.queryItems?.first(where: { $0.name == "code" })?.value
+            guard let inviteCode else {
+                authMessage = "This calendar invite link is invalid."
+                return
+            }
+            handleIncomingCalendarInviteCode(inviteCode)
+            return
+        }
+
+        guard host == "share" else {
             shareImportLogger.debug(
                 "Ignored URL with unsupported route: \(url.absoluteString, privacy: .public)"
             )

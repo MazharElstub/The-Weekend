@@ -13,6 +13,20 @@ import UserNotifications
 
 struct WeekendPlannerIOSTests {
     @Test
+    func calendarInviteLinkBuildsJoinDeepLink() {
+        let url = CalendarInviteLink.url(forShareCode: "ABCD1234")
+
+        #expect(url?.absoluteString == "theweekend://join?code=ABCD1234")
+    }
+
+    @Test
+    func calendarInviteLinkNormalizesCodesFromTextAndLinks() {
+        #expect(CalendarInviteLink.normalizedShareCode(from: "abcd-1234") == "ABCD1234")
+        #expect(CalendarInviteLink.normalizedShareCode(from: "Share code: ABCD 1234") == "ABCD1234")
+        #expect(CalendarInviteLink.normalizedShareCode(from: "theweekend://join?code=abcd1234") == "ABCD1234")
+    }
+
+    @Test
     func weekendKeyParsesSaturdayAndSunday() {
         let saturday = makeDate(year: 2026, month: 2, day: 14)
         let sunday = makeDate(year: 2026, month: 2, day: 15)
@@ -1182,6 +1196,41 @@ struct WeekendPlannerIOSTests {
 
         #expect(state.importReviewItems.first?.status == .ignored)
         #expect(state.importReviewItems.first?.resolution == .ignoreSourceEvent)
+    }
+
+    @Test
+    @MainActor
+    func resolveImportReview_AddAnnualLeaveOnlyAfterSuccessfulImport() {
+        let state = AppState()
+        resetAnnualLeaveContext(state)
+        let review = CalendarImportReviewItem(
+            sourceCalendarID: "device-calendar",
+            sourceEventID: "event-4",
+            sourceCalendarTitle: "Trips",
+            sourceSourceTitle: "iCloud",
+            title: "Trip",
+            startDate: makeDate(year: 2026, month: 2, day: 13),
+            endDate: makeDate(year: 2026, month: 2, day: 17),
+            allDay: true,
+            lastModified: makeDate(year: 2026, month: 1, day: 1),
+            sourceFingerprint: "fingerprint",
+            sourceCalendarAllowsWrites: true,
+            weekendKey: "2026-02-14",
+            offDayPlannerDays: [WeekendDay.sat.rawValue, WeekendDay.sun.rawValue],
+            fullSpanPlannerDays: [WeekendDay.fri.rawValue, WeekendDay.sat.rawValue, WeekendDay.sun.rawValue, WeekendDay.mon.rawValue],
+            offDayDateKeys: ["2026-02-14", "2026-02-15"],
+            workingDayDateKeys: ["2026-02-13", "2026-02-16"],
+            status: .pending,
+            resolution: nil,
+            createdAt: makeDate(year: 2026, month: 1, day: 1),
+            updatedAt: makeDate(year: 2026, month: 1, day: 1)
+        )
+        state.importReviewItems = [review]
+
+        state.resolveImportReview(review.id, action: .addAnnualLeaveAndImportFullSpan)
+
+        #expect(state.annualLeaveDays.isEmpty)
+        #expect(state.importReviewItems.first?.status == .pending)
     }
 
     @Test

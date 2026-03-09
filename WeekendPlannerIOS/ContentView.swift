@@ -15,7 +15,8 @@ enum PageEdgeLayoutContract {
     static let settingsAccountContainerID = "settings.account.container"
     static let plannerWeekendCardIDPrefix = "planner.weekend.card."
     static let plannerInterCardReminderRowIDPrefix = "planner.intercard.reminder.row."
-    static let rootTabHorizontalPadding: CGFloat = 12
+    // Settings uses inset-grouped list margins, which are visually closer to 20pt on iPhone.
+    static let rootTabHorizontalPadding: CGFloat = 20
     static let frameAlignmentTolerance: CGFloat = 1.0
 }
 
@@ -3904,6 +3905,7 @@ struct CalendarInviteQRSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     private let ciContext = CIContext()
+    private var inviteURL: URL? { CalendarInviteLink.url(forShareCode: calendar.shareCode) }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -3916,7 +3918,8 @@ struct CalendarInviteQRSheet: View {
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
 
-            if let image = qrCodeImage(for: calendar.shareCode) {
+            if let inviteURL,
+               let image = qrCodeImage(for: inviteURL.absoluteString) {
                 Image(uiImage: image)
                     .interpolation(.none)
                     .resizable()
@@ -3940,7 +3943,7 @@ struct CalendarInviteQRSheet: View {
                     )
             }
 
-            Text("Share code: \(calendar.shareCode)")
+            Text("Share code: \(CalendarInviteLink.formattedShareCode(calendar.shareCode))")
                 .font(.body.monospaced().weight(.semibold))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -3953,7 +3956,7 @@ struct CalendarInviteQRSheet: View {
                         .stroke(AppSurfaceStyle.dayStroke, lineWidth: 1)
                 )
 
-            Text("Ask your collaborator to scan this QR code, then paste the code into Join shared calendar.")
+            Text("Scan this QR code to open The Weekend and join automatically. If needed, enter the code manually in Settings -> Calendars -> Join with code.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
