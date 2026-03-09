@@ -346,6 +346,17 @@ struct AnnualLeaveDay: Identifiable, Codable, Hashable {
     var id: String { dateKey }
 }
 
+struct AnnualLeaveRangeSummary: Identifiable, Hashable {
+    let startDateKey: String
+    let endDateKey: String
+    let note: String
+    let dateKeys: [String]
+
+    var id: String {
+        "\(startDateKey)|\(endDateKey)|\(note)"
+    }
+}
+
 struct PersonalReminder: Identifiable, Codable, Hashable {
     enum Kind: String, Codable, CaseIterable, Identifiable {
         case reminder
@@ -1304,7 +1315,78 @@ struct ImportedEventLink: Identifiable, Codable, Hashable {
 enum ImportConflictState: String, Codable {
     case none
     case pending
-    case acknowledged
+    case accepted
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case Self.none.rawValue:
+            self = .none
+        case Self.pending.rawValue:
+            self = .pending
+        case Self.accepted.rawValue, "acknowledged":
+            self = .accepted
+        default:
+            self = .none
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+enum CalendarImportReviewStatus: String, Codable {
+    case pending
+    case resolved
+    case ignored
+}
+
+enum CalendarImportReviewResolution: String, Codable {
+    case importOffDaysOnly
+    case addAnnualLeaveAndImportFullSpan
+    case ignoreSourceEvent
+}
+
+struct CalendarImportReviewItem: Identifiable, Codable, Hashable {
+    let sourceCalendarID: String
+    let sourceEventID: String
+    var sourceCalendarTitle: String
+    var sourceSourceTitle: String
+    var title: String
+    var startDate: Date
+    var endDate: Date
+    var allDay: Bool
+    var lastModified: Date
+    var sourceFingerprint: String
+    var sourceCalendarAllowsWrites: Bool
+    var weekendKey: String
+    var offDayPlannerDays: [String]
+    var fullSpanPlannerDays: [String]
+    var offDayDateKeys: [String]
+    var workingDayDateKeys: [String]
+    var status: CalendarImportReviewStatus
+    var resolution: CalendarImportReviewResolution?
+    var createdAt: Date
+    var updatedAt: Date
+
+    var id: String {
+        "\(sourceCalendarID)|\(sourceEventID)"
+    }
+}
+
+private struct ImportedSourceEventAssessment {
+    let event: WeekendEvent
+    let fingerprint: String
+    let isInformational: Bool
+    let reviewItem: CalendarImportReviewItem?
+}
+
+struct CalendarImportRunResult {
+    let didSucceed: Bool
+    let message: String
 }
 
 enum SyncTrigger: String, Codable {
@@ -1320,14 +1402,61 @@ struct CalendarImportSettings: Codable, Equatable {
     var lastSyncAt: Date?
     var syncWindowDaysPast: Int
     var syncWindowDaysFuture: Int
+    var exportNewPlansByDefault: Bool
 
     static let defaults = CalendarImportSettings(
         isEnabled: false,
         selectedSourceCalendarIDs: [],
         lastSyncAt: nil,
         syncWindowDaysPast: 30,
-        syncWindowDaysFuture: 120
+        syncWindowDaysFuture: 120,
+        exportNewPlansByDefault: false
     )
+
+    init(
+        isEnabled: Bool,
+        selectedSourceCalendarIDs: [String],
+        lastSyncAt: Date?,
+        syncWindowDaysPast: Int,
+        syncWindowDaysFuture: Int,
+        exportNewPlansByDefault: Bool
+    ) {
+        self.isEnabled = isEnabled
+        self.selectedSourceCalendarIDs = selectedSourceCalendarIDs
+        self.lastSyncAt = lastSyncAt
+        self.syncWindowDaysPast = syncWindowDaysPast
+        self.syncWindowDaysFuture = syncWindowDaysFuture
+        self.exportNewPlansByDefault = exportNewPlansByDefault
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case selectedSourceCalendarIDs
+        case lastSyncAt
+        case syncWindowDaysPast
+        case syncWindowDaysFuture
+        case exportNewPlansByDefault
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        selectedSourceCalendarIDs = try container.decodeIfPresent([String].self, forKey: .selectedSourceCalendarIDs) ?? []
+        lastSyncAt = try container.decodeIfPresent(Date.self, forKey: .lastSyncAt)
+        syncWindowDaysPast = try container.decodeIfPresent(Int.self, forKey: .syncWindowDaysPast) ?? 30
+        syncWindowDaysFuture = try container.decodeIfPresent(Int.self, forKey: .syncWindowDaysFuture) ?? 120
+        exportNewPlansByDefault = try container.decodeIfPresent(Bool.self, forKey: .exportNewPlansByDefault) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(selectedSourceCalendarIDs, forKey: .selectedSourceCalendarIDs)
+        try container.encodeIfPresent(lastSyncAt, forKey: .lastSyncAt)
+        try container.encode(syncWindowDaysPast, forKey: .syncWindowDaysPast)
+        try container.encode(syncWindowDaysFuture, forKey: .syncWindowDaysFuture)
+        try container.encode(exportNewPlansByDefault, forKey: .exportNewPlansByDefault)
+    }
 }
 
 struct HolidayInfoPill: Identifiable, Hashable {
@@ -1565,6 +1694,7 @@ final class AppState: ObservableObject {
             rebuildStatusIndex()
         }
     }
+    @Published var importReviewItems: [CalendarImportReviewItem] = []
     @Published var importConflicts: [String: ImportConflictState] = [:] {
         didSet {
             rebuildPendingConflictIndex()
@@ -1708,6 +1838,7 @@ final class AppState: ObservableObject {
         static let eventCalendarAttributions = "event_calendar_attributions_cache.json"
         static let importLinks = "import_links_cache.json"
         static let importSettings = "import_settings_cache.json"
+        static let importReviews = "import_reviews_cache.json"
         static let importConflicts = "import_conflicts_cache.json"
     }
 
@@ -1737,6 +1868,7 @@ final class AppState: ObservableObject {
         case eventCalendarAttributions
         case importLinks
         case importSettings
+        case importReviews
         case importConflicts
     }
 
@@ -1810,6 +1942,7 @@ final class AppState: ObservableObject {
         )
         self.importedEventLinks = localCacheStore.load([ImportedEventLink].self, fileName: CacheFile.importLinks, fallback: [])
         self.importedEventIDLookup = Set(self.importedEventLinks.map(\.weekendEventID))
+        self.importReviewItems = localCacheStore.load([CalendarImportReviewItem].self, fileName: CacheFile.importReviews, fallback: [])
         self.importConflicts = localCacheStore.load([String: ImportConflictState].self, fileName: CacheFile.importConflicts, fallback: [:])
         self.planTemplates = localCacheStore.load([PlanTemplate].self, fileName: CacheFile.templates, fallback: templateStore.load())
         self.planTemplateBundles = localCacheStore.load([PlanTemplateBundle].self, fileName: CacheFile.templateBundles, fallback: bundleStore.load())
@@ -2180,6 +2313,7 @@ final class AppState: ObservableObject {
         availableExternalCalendars = []
         calendarImportSettings = .defaults
         importedEventLinks = []
+        importReviewItems = []
         importConflicts = [:]
         pendingOperations = []
         syncStates = [:]
@@ -3261,23 +3395,17 @@ final class AppState: ObservableObject {
     }
 
     func addAnnualLeaveRange(from startDate: Date, to endDate: Date, note: String) {
-        let calendar = CalendarHelper.calendar
-        let normalizedStart = calendar.startOfDay(for: min(startDate, endDate))
-        let normalizedEnd = calendar.startOfDay(for: max(startDate, endDate))
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
-
         var leaveByDateKey = Dictionary(uniqueKeysWithValues: annualLeaveDays.map { ($0.dateKey, $0) })
-        var cursor = normalizedStart
-        while cursor <= normalizedEnd {
-            let dateKey = CalendarHelper.formatKey(cursor)
+
+        for eligibleDate in annualLeaveEligibleDates(from: startDate, to: endDate) {
+            let dateKey = CalendarHelper.formatKey(eligibleDate)
             if var existing = leaveByDateKey[dateKey] {
                 existing.note = trimmed
                 leaveByDateKey[dateKey] = existing
             } else {
                 leaveByDateKey[dateKey] = AnnualLeaveDay(dateKey: dateKey, note: trimmed)
             }
-            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
-            cursor = next
         }
 
         annualLeaveDays = leaveByDateKey.values.sorted { $0.dateKey < $1.dateKey }
@@ -3287,6 +3415,76 @@ final class AppState: ObservableObject {
     func removeAnnualLeaveDay(_ dateKey: String) {
         annualLeaveDays.removeAll { $0.dateKey == dateKey }
         persistAnnualLeaveDays()
+    }
+
+    func removeAnnualLeaveDays(_ dateKeys: [String]) {
+        let keysToRemove = Set(dateKeys)
+        annualLeaveDays.removeAll { keysToRemove.contains($0.dateKey) }
+        persistAnnualLeaveDays()
+    }
+
+    func annualLeaveEligibleDates(from startDate: Date, to endDate: Date) -> [Date] {
+        let calendar = CalendarHelper.calendar
+        let normalizedStart = calendar.startOfDay(for: min(startDate, endDate))
+        let normalizedEnd = calendar.startOfDay(for: max(startDate, endDate))
+
+        var dates: [Date] = []
+        var cursor = normalizedStart
+        while cursor <= normalizedEnd {
+            if isEligibleAnnualLeaveDate(cursor) {
+                dates.append(cursor)
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+
+        return dates
+    }
+
+    func annualLeaveRangeSummaries() -> [AnnualLeaveRangeSummary] {
+        let sortedLeaves = annualLeaveDays.sorted { $0.dateKey < $1.dateKey }
+        guard !sortedLeaves.isEmpty else { return [] }
+
+        var groups: [AnnualLeaveRangeSummary] = []
+        var currentDateKeys: [String] = [sortedLeaves[0].dateKey]
+        var currentNote = sortedLeaves[0].note
+        var previousDate = CalendarHelper.parseKey(sortedLeaves[0].dateKey)
+
+        func appendCurrentGroup() {
+            guard let startDateKey = currentDateKeys.first,
+                  let endDateKey = currentDateKeys.last else { return }
+            groups.append(
+                AnnualLeaveRangeSummary(
+                    startDateKey: startDateKey,
+                    endDateKey: endDateKey,
+                    note: currentNote,
+                    dateKeys: currentDateKeys
+                )
+            )
+        }
+
+        for leave in sortedLeaves.dropFirst() {
+            let nextDate = CalendarHelper.parseKey(leave.dateKey)
+            let shouldContinueCurrentGroup = shouldContinueAnnualLeaveRange(
+                previousDate: previousDate,
+                previousNote: currentNote,
+                nextDate: nextDate,
+                nextNote: leave.note
+            )
+
+            if shouldContinueCurrentGroup {
+                currentDateKeys.append(leave.dateKey)
+            } else {
+                appendCurrentGroup()
+                currentDateKeys = [leave.dateKey]
+                currentNote = leave.note
+            }
+
+            previousDate = nextDate
+        }
+
+        appendCurrentGroup()
+        return groups
     }
 
     func addPersonalReminder(
@@ -3480,6 +3678,46 @@ final class AppState: ObservableObject {
         !offDayReasons(for: date).isEmpty
     }
 
+    private func isEligibleAnnualLeaveDate(_ date: Date) -> Bool {
+        !offDayReasons(for: date).contains { reason in
+            switch reason {
+            case .weekend, .publicHoliday:
+                return true
+            case .fridayEveningStart, .annualLeave:
+                return false
+            }
+        }
+    }
+
+    private func shouldContinueAnnualLeaveRange(
+        previousDate: Date?,
+        previousNote: String,
+        nextDate: Date?,
+        nextNote: String
+    ) -> Bool {
+        guard previousNote == nextNote,
+              let previousDate,
+              let nextDate else {
+            return false
+        }
+
+        let calendar = CalendarHelper.calendar
+        let normalizedPreviousDate = calendar.startOfDay(for: previousDate)
+        let normalizedNextDate = calendar.startOfDay(for: nextDate)
+        guard normalizedNextDate > normalizedPreviousDate else { return false }
+
+        guard let dayAfterPrevious = calendar.date(byAdding: .day, value: 1, to: normalizedPreviousDate),
+              let dayBeforeNext = calendar.date(byAdding: .day, value: -1, to: normalizedNextDate) else {
+            return false
+        }
+
+        if dayAfterPrevious > dayBeforeNext {
+            return true
+        }
+
+        return annualLeaveEligibleDates(from: dayAfterPrevious, to: dayBeforeNext).isEmpty
+    }
+
     func availableDisplayOffDayOptions(for weekendKey: String) -> [OffDayOption] {
         let calendar = CalendarHelper.calendar
         return WeekendDay.allCases
@@ -3543,11 +3781,10 @@ final class AppState: ObservableObject {
                     )
                 )
             case .annualLeave(let note):
-                let label = note.isEmpty ? "Annual leave" : note
                 pills.append(
                     HolidayInfoPill(
-                        id: "annual-leave-\(label)",
-                        label: label,
+                        id: "annual-leave-\(note.isEmpty ? "default" : note)",
+                        label: "Annual Leave",
                         kind: .annualLeave,
                         reminderEventID: nil,
                         personalReminderID: nil,
@@ -4314,6 +4551,117 @@ final class AppState: ObservableObject {
         !calendarExportStore.identifiers(for: eventId).isEmpty
     }
 
+    var pendingImportReviewItems: [CalendarImportReviewItem] {
+        importReviewItems
+            .filter { $0.status == .pending }
+            .sorted {
+                if $0.startDate == $1.startDate {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return $0.startDate < $1.startDate
+            }
+    }
+
+    var pendingImportReviewCount: Int {
+        pendingImportReviewItems.count
+    }
+
+    func importReviewItem(id: String) -> CalendarImportReviewItem? {
+        importReviewItems.first(where: { $0.id == id })
+    }
+
+    func setExportNewPlansByDefault(_ enabled: Bool) {
+        guard calendarImportSettings.exportNewPlansByDefault != enabled else { return }
+        calendarImportSettings.exportNewPlansByDefault = enabled
+        persistCaches(scopes: [.importSettings])
+    }
+
+    func resolveImportReview(_ reviewID: String, action: CalendarImportReviewResolution) {
+        guard let reviewIndex = importReviewItems.firstIndex(where: { $0.id == reviewID }) else { return }
+        var review = importReviewItems[reviewIndex]
+
+        switch action {
+        case .importOffDaysOnly:
+            if upsertImportedEvent(from: review, usingPlannerDays: review.offDayPlannerDays) {
+                review.status = .resolved
+                review.resolution = action
+            } else {
+                authMessage = "Could not import this event into Weekend Planner."
+            }
+        case .addAnnualLeaveAndImportFullSpan:
+            for dateKey in review.workingDayDateKeys.sorted() {
+                guard let date = CalendarHelper.parseKey(dateKey) else { continue }
+                addAnnualLeaveDay(date, note: review.title)
+            }
+            if upsertImportedEvent(from: review, usingPlannerDays: review.fullSpanPlannerDays) {
+                review.status = .resolved
+                review.resolution = action
+            } else {
+                authMessage = "Could not import this event into Weekend Planner."
+            }
+        case .ignoreSourceEvent:
+            review.status = .ignored
+            review.resolution = action
+        }
+
+        review.updatedAt = Date()
+        importReviewItems[reviewIndex] = review
+        persistCaches(scopes: [.events, .eventDescriptions, .importLinks, .importSettings, .importReviews, .syncQueue, .syncStates], policy: .immediate)
+    }
+
+    func openImportReviewCreateManually(_ reviewID: String) {
+        guard let review = importReviewItem(id: reviewID) else { return }
+        selectedTab = .weekend
+        selectedMonthKey = monthSelectionKey(for: review.weekendKey)
+        pendingAddPlanWeekendKey = review.weekendKey
+        pendingAddPlanBypassProtection = false
+        pendingAddPlanInitialDate = CalendarHelper.parseKey(review.workingDayDateKeys.first ?? review.offDayDateKeys.first ?? review.weekendKey)
+        pendingAddPlanPrefill = AddPlanPrefill(
+            title: review.title,
+            details: manualImportPrefillDetails(for: review)
+        )
+    }
+
+    private func syncImportReviewItem(_ candidate: CalendarImportReviewItem) -> Bool {
+        if let index = importReviewItems.firstIndex(where: { $0.id == candidate.id }) {
+            let existing = importReviewItems[index]
+            let shouldReopen = existing.sourceFingerprint != candidate.sourceFingerprint
+            importReviewItems[index].sourceCalendarTitle = candidate.sourceCalendarTitle
+            importReviewItems[index].sourceSourceTitle = candidate.sourceSourceTitle
+            importReviewItems[index].title = candidate.title
+            importReviewItems[index].startDate = candidate.startDate
+            importReviewItems[index].endDate = candidate.endDate
+            importReviewItems[index].allDay = candidate.allDay
+            importReviewItems[index].lastModified = candidate.lastModified
+            importReviewItems[index].sourceFingerprint = candidate.sourceFingerprint
+            importReviewItems[index].sourceCalendarAllowsWrites = candidate.sourceCalendarAllowsWrites
+            importReviewItems[index].weekendKey = candidate.weekendKey
+            importReviewItems[index].offDayPlannerDays = candidate.offDayPlannerDays
+            importReviewItems[index].fullSpanPlannerDays = candidate.fullSpanPlannerDays
+            importReviewItems[index].offDayDateKeys = candidate.offDayDateKeys
+            importReviewItems[index].workingDayDateKeys = candidate.workingDayDateKeys
+            if shouldReopen || existing.status == .pending {
+                importReviewItems[index].status = .pending
+                importReviewItems[index].resolution = nil
+            }
+            importReviewItems[index].updatedAt = Date()
+            return true
+        }
+
+        importReviewItems.append(candidate)
+        return true
+    }
+
+    private func shouldSkipCleanImportDueToExistingReview(sourceKey: String, sourceFingerprint: String) -> Bool {
+        guard let index = importReviewItems.firstIndex(where: { $0.id == sourceKey }) else { return false }
+        let existing = importReviewItems[index]
+        if existing.status == .ignored && existing.sourceFingerprint == sourceFingerprint {
+            return true
+        }
+        importReviewItems.remove(at: index)
+        return false
+    }
+
     func refreshCalendarPermissionState() async {
         calendarPermissionState = calendarService.permissionState()
         if calendarPermissionState.canReadEvents {
@@ -4394,13 +4742,44 @@ final class AppState: ObservableObject {
         await reconcileImportedCalendarEvents(trigger: .initial)
     }
 
-    func reconcileImportedCalendarEvents(trigger: SyncTrigger) async {
-        guard calendarImportSettings.isEnabled else { return }
-        guard calendarPermissionState.canReadEvents else { return }
-        guard session != nil else { return }
-        guard await ensureImportSourceCalendarsSelectedIfNeeded() else { return }
-        guard !isReconcilingImportedEvents else { return }
-        if shouldThrottleAutomaticReconcile(trigger: trigger) { return }
+    @discardableResult
+    func reconcileImportedCalendarEvents(trigger: SyncTrigger) async -> CalendarImportRunResult {
+        guard calendarImportSettings.isEnabled else {
+            return CalendarImportRunResult(
+                didSucceed: false,
+                message: "Calendar import sync is turned off."
+            )
+        }
+        guard calendarPermissionState.canReadEvents else {
+            return CalendarImportRunResult(
+                didSucceed: false,
+                message: "Calendar access is required before importing."
+            )
+        }
+        guard session != nil else {
+            return CalendarImportRunResult(
+                didSucceed: false,
+                message: "Sign in to import calendar events."
+            )
+        }
+        guard await ensureImportSourceCalendarsSelectedIfNeeded() else {
+            return CalendarImportRunResult(
+                didSucceed: false,
+                message: "No device calendars are available to import right now."
+            )
+        }
+        guard !isReconcilingImportedEvents else {
+            return CalendarImportRunResult(
+                didSucceed: false,
+                message: "Calendar import is already running."
+            )
+        }
+        if shouldThrottleAutomaticReconcile(trigger: trigger) {
+            return CalendarImportRunResult(
+                didSucceed: true,
+                message: "Calendar import skipped because a recent sync already ran."
+            )
+        }
 
         isReconcilingImportedEvents = true
         defer { isReconcilingImportedEvents = false }
@@ -4435,14 +4814,27 @@ final class AppState: ObservableObject {
             var didEnqueueOperations = false
             var needsEventSort = false
             var conflictCandidateIDs: Set<String> = []
+            var createdCount = 0
+            var updatedCount = 0
+            var removedCount = 0
             let writableByCalendarID = Dictionary(uniqueKeysWithValues: availableExternalCalendars.map { ($0.id, $0.allowsWrites) })
 
             for sourceEvent in sourceEvents {
-                guard let importedDraft = draftImportedEvent(from: sourceEvent) else { continue }
+                let writable = writableByCalendarID[sourceEvent.sourceCalendarID] ?? false
+                guard let importedDraft = importedSourceEventAssessment(from: sourceEvent, allowsWrites: writable) else { continue }
                 let sourceKey = sourceKey(calendarID: sourceEvent.sourceCalendarID, eventID: sourceEvent.sourceEventID)
                 seenSourceKeys.insert(sourceKey)
                 let sourceFingerprint = importedDraft.fingerprint
                 if importedDraft.isInformational, dismissedInformationalSourceKeys.contains(sourceKey) {
+                    continue
+                }
+                if let reviewItem = importedDraft.reviewItem {
+                    if syncImportReviewItem(reviewItem) {
+                        didMutateImportMetadata = true
+                    }
+                    continue
+                }
+                if shouldSkipCleanImportDueToExistingReview(sourceKey: sourceKey, sourceFingerprint: sourceFingerprint) {
                     continue
                 }
 
@@ -4487,6 +4879,9 @@ final class AppState: ObservableObject {
                         let merged = mergeImportedEvent(importedDraft.event, into: existing)
                         events[existingIndex] = merged
                         importedEventLinks[linkIndex].lastFingerprint = sourceFingerprint
+                        if importConflicts[existing.id] == .accepted {
+                            importConflicts[existing.id] = .pending
+                        }
                         enqueueOperation(
                             PendingSyncOperation(
                                 type: .upsertEvent,
@@ -4500,6 +4895,7 @@ final class AppState: ObservableObject {
                         conflictCandidateIDs.insert(merged.id)
                         localEventsChanged = true
                         didMutateImportMetadata = true
+                        updatedCount += 1
                     } else {
                         importedEventLinks.remove(at: linkIndex)
                         didMutateImportMetadata = true
@@ -4511,7 +4907,6 @@ final class AppState: ObservableObject {
                     sourceCalendarID: sourceEvent.sourceCalendarID,
                     candidate: importedDraft.event
                 ) {
-                    let writable = writableByCalendarID[sourceEvent.sourceCalendarID] ?? false
                     importedEventLinks.append(
                         ImportedEventLink(
                             weekendEventID: dedupedEventID,
@@ -4551,7 +4946,6 @@ final class AppState: ObservableObject {
                 )
                 events.append(created)
                 needsEventSort = true
-                let writable = writableByCalendarID[sourceEvent.sourceCalendarID] ?? false
                 importedEventLinks.append(
                     ImportedEventLink(
                         weekendEventID: created.id,
@@ -4575,6 +4969,7 @@ final class AppState: ObservableObject {
                 conflictCandidateIDs.insert(created.id)
                 localEventsChanged = true
                 didMutateImportMetadata = true
+                createdCount += 1
             }
 
             if shouldSweepMissingSourceLinks {
@@ -4607,11 +5002,19 @@ final class AppState: ObservableObject {
                         didEnqueueOperations = true
                         localEventsChanged = true
                         didMutateImportMetadata = true
+                        removedCount += 1
                     } else {
                         importConflicts[localEvent.id] = .pending
                         conflictCandidateIDs.insert(localEvent.id)
                         didMutateImportMetadata = true
                     }
+                }
+
+                let reviewSnapshot = importReviewItems.filter { selectedSourceIDs.contains($0.sourceCalendarID) }
+                for review in reviewSnapshot {
+                    guard !seenSourceKeys.contains(review.id) else { continue }
+                    importReviewItems.removeAll { $0.id == review.id }
+                    didMutateImportMetadata = true
                 }
             }
 
@@ -4638,6 +5041,7 @@ final class AppState: ObservableObject {
                         .events,
                         .eventDescriptions,
                         .importLinks,
+                        .importReviews,
                         .importConflicts,
                         .importSettings,
                         .syncQueue,
@@ -4653,14 +5057,24 @@ final class AppState: ObservableObject {
             if didEnqueueOperations {
                 scheduleSyncFlush(reason: "calendar-import")
             }
+            return calendarImportRunResult(
+                createdCount: createdCount,
+                updatedCount: updatedCount,
+                removedCount: removedCount,
+                pendingReviewCount: pendingImportReviewCount
+            )
         } catch {
             authMessage = "Calendar import failed. \(error.localizedDescription)"
+            return CalendarImportRunResult(
+                didSucceed: false,
+                message: "Calendar import failed. \(error.localizedDescription)"
+            )
         }
     }
 
-    func acknowledgeConflict(eventId: String) {
+    func acceptConflict(eventId: String) {
         guard importConflicts[eventId] == .pending else { return }
-        importConflicts[eventId] = .acknowledged
+        importConflicts[eventId] = .accepted
         persistCaches(scopes: [.importConflicts])
     }
 
@@ -4674,6 +5088,49 @@ final class AppState: ObservableObject {
 
     func hasPendingImportConflict(weekendKey: String) -> Bool {
         pendingConflictWeekendKeys.contains(weekendKey)
+    }
+
+    func importConflictOverlaps(forImportedEventID eventID: String) -> [WeekendEvent] {
+        guard let importedEvent = events.first(where: { $0.id == eventID }) else { return [] }
+        let importedIntervals = intervals(for: importedEvent)
+        guard !importedIntervals.isEmpty else { return [] }
+
+        return events
+            .filter { other in
+                guard other.id != importedEvent.id else { return false }
+                guard other.weekendKey == importedEvent.weekendKey else { return false }
+                guard !isImportedEvent(other.id) else { return false }
+
+                let otherIntervals = intervals(for: other)
+                return importedIntervals.contains { importedInterval in
+                    otherIntervals.contains { otherInterval in
+                        importedInterval.intersects(otherInterval)
+                    }
+                }
+            }
+            .sorted { lhs, rhs in
+                if lhs.startTime == rhs.startTime {
+                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+                }
+                return lhs.startTime < rhs.startTime
+            }
+    }
+
+    func isPrimaryPlannerDisplayDay(_ day: WeekendDay, for event: WeekendEvent) -> Bool {
+        let primaryDay = event.dayValues.min { lhs, rhs in
+            let leftDate = plannerDisplayDate(for: event.weekendKey, day: lhs)
+                ?? CalendarHelper.dateForPlannerDay(lhs, weekendKey: event.weekendKey)
+            let rightDate = plannerDisplayDate(for: event.weekendKey, day: rhs)
+                ?? CalendarHelper.dateForPlannerDay(rhs, weekendKey: event.weekendKey)
+
+            switch (leftDate, rightDate) {
+            case let (left?, right?) where left != right:
+                return left < right
+            default:
+                return lhs.plannerRowSortOrder < rhs.plannerRowSortOrder
+            }
+        }
+        return primaryDay == day
     }
 
     var calendarImportLastSyncLabel: String {
@@ -5433,6 +5890,45 @@ final class AppState: ObservableObject {
         return Date().timeIntervalSince(lastAutomaticImportReconcileAt) < 60
     }
 
+    private func calendarImportRunResult(
+        createdCount: Int,
+        updatedCount: Int,
+        removedCount: Int,
+        pendingReviewCount: Int
+    ) -> CalendarImportRunResult {
+        var parts: [String] = []
+
+        if createdCount > 0 {
+            parts.append(calendarImportCountLabel(createdCount, singular: "added", plural: "added"))
+        }
+        if updatedCount > 0 {
+            parts.append(calendarImportCountLabel(updatedCount, singular: "updated", plural: "updated"))
+        }
+        if removedCount > 0 {
+            parts.append(calendarImportCountLabel(removedCount, singular: "removed", plural: "removed"))
+        }
+        if pendingReviewCount > 0 {
+            parts.append(calendarImportCountLabel(pendingReviewCount, singular: "needs review", plural: "need review"))
+        }
+
+        if parts.isEmpty {
+            return CalendarImportRunResult(
+                didSucceed: true,
+                message: "Import complete. No calendar changes were needed."
+            )
+        }
+
+        return CalendarImportRunResult(
+            didSucceed: true,
+            message: "Import complete. \(parts.joined(separator: ", "))."
+        )
+    }
+
+    private func calendarImportCountLabel(_ count: Int, singular: String, plural: String) -> String {
+        let suffix = count == 1 ? singular : plural
+        return "\(count) \(suffix)"
+    }
+
     private func ensureImportSourceCalendarsSelectedIfNeeded() async -> Bool {
         if !calendarImportSettings.selectedSourceCalendarIDs.isEmpty {
             return true
@@ -5474,27 +5970,132 @@ final class AppState: ObservableObject {
         return selectedCalendarId
     }
 
-    private func draftImportedEvent(from sourceEvent: ExternalCalendarEvent) -> (event: WeekendEvent, fingerprint: String, isInformational: Bool)? {
-        let calendar = CalendarHelper.calendar
-        let sourceStart = sourceEvent.startDate
-        let sourceEnd = max(sourceEvent.endDate, sourceEvent.startDate.addingTimeInterval(60))
-        guard let intersection = CalendarHelper.weekendIntersection(start: sourceStart, end: sourceEnd) else {
-            return nil
-        }
-        let days = intersection.days.map(\.rawValue)
+    func importReviewCandidate(for sourceEvent: ExternalCalendarEvent, allowsWrites: Bool) -> CalendarImportReviewItem? {
+        importedSourceEventAssessment(from: sourceEvent, allowsWrites: allowsWrites)?.reviewItem
+    }
 
-        let spansMultipleDays = !calendar.isDate(sourceStart, inSameDayAs: sourceEnd.addingTimeInterval(-1)) || days.count > 1
+    private func importedSourceEventAssessment(
+        from sourceEvent: ExternalCalendarEvent,
+        allowsWrites: Bool
+    ) -> ImportedSourceEventAssessment? {
+        let coveredDates = coveredSourceDates(for: sourceEvent)
+        guard !coveredDates.isEmpty else { return nil }
+
+        let offDayDates = coveredDates.filter(isOffDay)
+        guard !offDayDates.isEmpty else { return nil }
+
+        guard let weekendKey = resolvedImportWeekendKey(for: coveredDates) else { return nil }
+        let offDayPlannerDays = plannerDays(for: offDayDates, weekendKey: weekendKey)
+        guard !offDayPlannerDays.isEmpty else { return nil }
+
+        let draft = importedEventDraft(
+            from: sourceEvent,
+            weekendKey: weekendKey,
+            plannerDays: offDayPlannerDays
+        )
+        let fingerprint = fingerprint(for: draft)
+        let isInformational = isInformationalImportedSourceEvent(sourceEvent)
+        let workingDates = coveredDates.filter { !isOffDay($0) }
+        guard !workingDates.isEmpty else {
+            return ImportedSourceEventAssessment(
+                event: draft,
+                fingerprint: fingerprint,
+                isInformational: isInformational,
+                reviewItem: nil
+            )
+        }
+
+        let fullSpanPlannerDays = plannerDays(for: coveredDates, weekendKey: weekendKey)
+        guard !fullSpanPlannerDays.isEmpty else { return nil }
+        let now = Date()
+        let reviewItem = CalendarImportReviewItem(
+            sourceCalendarID: sourceEvent.sourceCalendarID,
+            sourceEventID: sourceEvent.sourceEventID,
+            sourceCalendarTitle: sourceEvent.sourceCalendarTitle,
+            sourceSourceTitle: sourceEvent.sourceSourceTitle,
+            title: sourceEvent.title,
+            startDate: sourceEvent.startDate,
+            endDate: max(sourceEvent.endDate, sourceEvent.startDate.addingTimeInterval(60)),
+            allDay: sourceEvent.allDay,
+            lastModified: sourceEvent.lastModified,
+            sourceFingerprint: fingerprint,
+            sourceCalendarAllowsWrites: allowsWrites,
+            weekendKey: weekendKey,
+            offDayPlannerDays: offDayPlannerDays.map(\.rawValue),
+            fullSpanPlannerDays: fullSpanPlannerDays.map(\.rawValue),
+            offDayDateKeys: offDayDates.map { CalendarHelper.formatKey($0) },
+            workingDayDateKeys: workingDates.map { CalendarHelper.formatKey($0) },
+            status: .pending,
+            resolution: nil,
+            createdAt: now,
+            updatedAt: now
+        )
+        return ImportedSourceEventAssessment(
+            event: draft,
+            fingerprint: fingerprint,
+            isInformational: isInformational,
+            reviewItem: reviewItem
+        )
+    }
+
+    private func coveredSourceDates(for sourceEvent: ExternalCalendarEvent) -> [Date] {
+        let calendar = CalendarHelper.calendar
+        let normalizedEnd = max(sourceEvent.endDate, sourceEvent.startDate.addingTimeInterval(60)).addingTimeInterval(-1)
+        let endDay = calendar.startOfDay(for: normalizedEnd)
+        var cursor = calendar.startOfDay(for: sourceEvent.startDate)
+        var dates: [Date] = []
+
+        while cursor <= endDay {
+            dates.append(cursor)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+
+        return dates
+    }
+
+    private func resolvedImportWeekendKey(for coveredDates: [Date]) -> String? {
+        let keys = Set(coveredDates.map { plannerDisplayWeekKey(for: $0) })
+        guard keys.count == 1 else { return nil }
+        return keys.first
+    }
+
+    private func plannerDays(for dates: [Date], weekendKey: String) -> [WeekendDay] {
+        let ordered = dates.sorted()
+        let unique = Set(
+            ordered.compactMap { plannerDisplayDay(for: $0, weekendKey: weekendKey) }
+        )
+        return unique.sorted { lhs, rhs in
+            let leftDate = plannerDisplayDate(for: weekendKey, day: lhs) ?? CalendarHelper.dateForPlannerDay(lhs, weekendKey: weekendKey)
+            let rightDate = plannerDisplayDate(for: weekendKey, day: rhs) ?? CalendarHelper.dateForPlannerDay(rhs, weekendKey: weekendKey)
+            switch (leftDate, rightDate) {
+            case let (left?, right?) where left != right:
+                return left < right
+            default:
+                return lhs.plannerRowSortOrder < rhs.plannerRowSortOrder
+            }
+        }
+    }
+
+    private func importedEventDraft(
+        from sourceEvent: ExternalCalendarEvent,
+        weekendKey: String,
+        plannerDays: [WeekendDay]
+    ) -> WeekendEvent {
+        let calendar = CalendarHelper.calendar
+        let sourceEnd = max(sourceEvent.endDate, sourceEvent.startDate.addingTimeInterval(60))
+        let spansMultipleDays = !calendar.isDate(sourceEvent.startDate, inSameDayAs: sourceEnd.addingTimeInterval(-1)) || plannerDays.count > 1
         let shouldTreatAsAllDay = sourceEvent.allDay || spansMultipleDays
-        let startTime = shouldTreatAsAllDay ? "00:00" : CalendarHelper.timeString(from: sourceStart)
+        let startTime = shouldTreatAsAllDay ? "00:00" : CalendarHelper.timeString(from: sourceEvent.startDate)
         let endTime = shouldTreatAsAllDay ? "23:59" : CalendarHelper.timeString(from: sourceEnd)
 
-        let draft = WeekendEvent(
+        return WeekendEvent(
             id: UUID().uuidString,
             title: sourceEvent.title,
             type: PlanType.plan.rawValue,
             calendarId: importTargetCalendarId(),
-            weekendKey: intersection.weekendKey,
-            days: days,
+            weekendKey: weekendKey,
+            days: plannerDays.map(\.rawValue),
             startTime: startTime,
             endTime: endTime,
             userId: session.map(normalizedUserId(for:)) ?? "",
@@ -5506,11 +6107,6 @@ final class AppState: ObservableObject {
             updatedAt: sourceEvent.lastModified,
             createdAt: sourceEvent.lastModified,
             deletedAt: nil
-        )
-        return (
-            draft,
-            fingerprint(for: draft),
-            isInformationalImportedSourceEvent(sourceEvent)
         )
     }
 
@@ -5526,6 +6122,135 @@ final class AppState: ObservableObject {
         merged.clientUpdatedAt = Date()
         merged.updatedAt = Date()
         return merged
+    }
+
+    private func manualImportPrefillDetails(for review: CalendarImportReviewItem) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        let start = formatter.string(from: review.startDate)
+        let end = formatter.string(from: review.endDate)
+        return "Imported from \(review.sourceCalendarTitle) (\(review.sourceSourceTitle)). Original dates: \(start) to \(end)."
+    }
+
+    private func upsertImportedEvent(
+        from review: CalendarImportReviewItem,
+        usingPlannerDays plannerDayValues: [String]
+    ) -> Bool {
+        guard let session else { return false }
+        let plannerDays = plannerDayValues.compactMap(WeekendDay.init(rawValue:))
+        guard !plannerDays.isEmpty else { return false }
+
+        let sourceEvent = ExternalCalendarEvent(
+            sourceCalendarID: review.sourceCalendarID,
+            sourceEventID: review.sourceEventID,
+            sourceCalendarTitle: review.sourceCalendarTitle,
+            sourceSourceTitle: review.sourceSourceTitle,
+            title: review.title,
+            startDate: review.startDate,
+            endDate: review.endDate,
+            allDay: review.allDay,
+            lastModified: review.lastModified
+        )
+        let importedDraft = importedEventDraft(
+            from: sourceEvent,
+            weekendKey: review.weekendKey,
+            plannerDays: plannerDays
+        )
+        let sourceFingerprint = fingerprint(for: importedDraft)
+        let sourceKey = sourceKey(calendarID: review.sourceCalendarID, eventID: review.sourceEventID)
+
+        if let linkIndex = importedEventLinks.firstIndex(where: {
+            $0.sourceCalendarID == review.sourceCalendarID &&
+            $0.sourceEventID == review.sourceEventID
+        }) {
+            if let existingIndex = events.firstIndex(where: { $0.id == importedEventLinks[linkIndex].weekendEventID }) {
+                events[existingIndex] = mergeImportedEvent(importedDraft, into: events[existingIndex])
+            } else {
+                importedEventLinks.remove(at: linkIndex)
+            }
+        }
+
+        if let linkIndex = importedEventLinks.firstIndex(where: {
+            $0.sourceCalendarID == review.sourceCalendarID &&
+            $0.sourceEventID == review.sourceEventID
+        }) {
+            importedEventLinks[linkIndex].lastFingerprint = sourceFingerprint
+            importedEventLinks[linkIndex].writable = review.sourceCalendarAllowsWrites
+            enqueueOperation(
+                PendingSyncOperation(
+                    type: .upsertEvent,
+                    entityId: importedEventLinks[linkIndex].weekendEventID,
+                    event: events.first(where: { $0.id == importedEventLinks[linkIndex].weekendEventID }),
+                    calendarId: events.first(where: { $0.id == importedEventLinks[linkIndex].weekendEventID })?.calendarId
+                ),
+                persistImmediately: false
+            )
+        } else if let existingID = dedupedImportedEventID(sourceCalendarID: review.sourceCalendarID, candidate: importedDraft) {
+            importedEventLinks.append(
+                ImportedEventLink(
+                    weekendEventID: existingID,
+                    sourceCalendarID: review.sourceCalendarID,
+                    sourceEventID: review.sourceEventID,
+                    lastFingerprint: sourceFingerprint,
+                    writable: review.sourceCalendarAllowsWrites,
+                    isInformational: false
+                )
+            )
+        } else {
+            let userId = normalizedUserId(for: session)
+            let now = Date()
+            let created = WeekendEvent(
+                id: UUID().uuidString,
+                title: importedDraft.title,
+                type: importedDraft.type,
+                calendarId: importedDraft.calendarId,
+                weekendKey: importedDraft.weekendKey,
+                days: importedDraft.days,
+                startTime: importedDraft.startTime,
+                endTime: importedDraft.endTime,
+                userId: userId,
+                calendarEventIdentifier: review.sourceEventID,
+                status: WeekendEventStatus.planned.rawValue,
+                completedAt: nil,
+                cancelledAt: nil,
+                clientUpdatedAt: now,
+                updatedAt: now,
+                createdAt: now,
+                deletedAt: nil
+            )
+            events = sortedEvents(events + [created])
+            importedEventLinks.append(
+                ImportedEventLink(
+                    weekendEventID: created.id,
+                    sourceCalendarID: review.sourceCalendarID,
+                    sourceEventID: review.sourceEventID,
+                    lastFingerprint: sourceFingerprint,
+                    writable: review.sourceCalendarAllowsWrites,
+                    isInformational: false
+                )
+            )
+            enqueueOperation(
+                PendingSyncOperation(
+                    type: .upsertEvent,
+                    entityId: created.id,
+                    event: created,
+                    calendarId: created.calendarId
+                ),
+                persistImmediately: false
+            )
+        }
+
+        dismissedInformationalSourceKeys.remove(sourceKey)
+        events = sortedEvents(events)
+        if let eventID = importedEventLinks.first(where: {
+            $0.sourceCalendarID == review.sourceCalendarID && $0.sourceEventID == review.sourceEventID
+        })?.weekendEventID {
+            updateConflictState(for: eventID)
+        }
+        scheduleNotificationResync(reason: "calendar-import-review")
+        scheduleSyncFlush(reason: "calendar-import-review")
+        return true
     }
 
     private func dedupedImportedEventID(sourceCalendarID: String, candidate: WeekendEvent) -> String? {
@@ -5581,7 +6306,7 @@ final class AppState: ObservableObject {
         }
 
         if hasOverlap {
-            if importConflicts[eventID] != .acknowledged {
+            if importConflicts[eventID] != .accepted {
                 importConflicts[eventID] = .pending
             }
         } else {
@@ -6058,6 +6783,7 @@ final class AppState: ObservableObject {
         case .eventCalendarAttributions: return CacheFile.eventCalendarAttributions
         case .importLinks: return CacheFile.importLinks
         case .importSettings: return CacheFile.importSettings
+        case .importReviews: return CacheFile.importReviews
         case .importConflicts: return CacheFile.importConflicts
         }
     }
@@ -6102,6 +6828,8 @@ final class AppState: ObservableObject {
                 persistenceCoordinator.scheduleSave(importedEventLinks, fileName: fileName(for: scope), policy: policy)
             case .importSettings:
                 persistenceCoordinator.scheduleSave(calendarImportSettings, fileName: fileName(for: scope), policy: policy)
+            case .importReviews:
+                persistenceCoordinator.scheduleSave(importReviewItems, fileName: fileName(for: scope), policy: policy)
             case .importConflicts:
                 persistenceCoordinator.scheduleSave(importConflicts, fileName: fileName(for: scope), policy: policy)
             }

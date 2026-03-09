@@ -94,7 +94,7 @@ final class WeekendPlannerIOSUITests: XCTestCase {
     }
 
     @MainActor
-    func testRootTabsShareSameHorizontalCardEdgesAsSettings() throws {
+    func testRootTabsUseSharedCompactHorizontalEdges() throws {
         let app = XCUIApplication()
         app.launchArguments.append("--uitest-skip-auth-splash")
         app.launch()
@@ -119,42 +119,38 @@ final class WeekendPlannerIOSUITests: XCTestCase {
         let plannerWeekendCardMinX = Double(plannerWeekendCard.frame.minX)
         let plannerWeekendCardMaxX = Double(plannerWeekendCard.frame.maxX)
 
-        tabBar.buttons["Settings"].tap()
-        let settingsAccount = firstElement(in: app, withIdentifier: "settings.account.container")
-        XCTAssertTrue(settingsAccount.waitForExistence(timeout: 5))
-        let settingsMinX = Double(settingsAccount.frame.minX)
-        let settingsMaxX = Double(settingsAccount.frame.maxX)
-
         let tolerance = 1.0
+        let expectedHorizontalInset = 12.0
+        let expectedMaxX = Double(app.frame.width) - expectedHorizontalInset
 
         XCTAssertEqual(
             dashboardMinX,
-            settingsMinX,
+            expectedHorizontalInset,
             accuracy: tolerance
         )
         XCTAssertEqual(
             dashboardMaxX,
-            settingsMaxX,
+            expectedMaxX,
             accuracy: tolerance
         )
         XCTAssertEqual(
             plannerSelectorMinX,
-            settingsMinX,
+            expectedHorizontalInset,
             accuracy: tolerance
         )
         XCTAssertEqual(
             plannerSelectorMaxX,
-            settingsMaxX,
+            expectedMaxX,
             accuracy: tolerance
         )
         XCTAssertEqual(
             plannerWeekendCardMinX,
-            settingsMinX,
+            expectedHorizontalInset,
             accuracy: tolerance
         )
         XCTAssertEqual(
             plannerWeekendCardMaxX,
-            settingsMaxX,
+            expectedMaxX,
             accuracy: tolerance
         )
     }
