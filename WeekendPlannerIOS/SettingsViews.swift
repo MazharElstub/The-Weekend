@@ -587,6 +587,12 @@ struct CalendarSettingsView: View {
         .weekendSettingsListStyle()
         .navigationTitle("Calendars")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            applyPendingCalendarActionMessageIfNeeded()
+        }
+        .onChange(of: state.pendingCalendarActionMessage) { _, _ in
+            applyPendingCalendarActionMessageIfNeeded()
+        }
         .sheet(isPresented: $showingCreateCalendarSheet) {
             CreateCalendarSheetView(
                 calendarActionMessage: $calendarActionMessage,
@@ -622,6 +628,13 @@ struct CalendarSettingsView: View {
 
     private func membersLabel(for calendar: PlannerCalendar) -> String {
         "Members \(calendar.memberCount)/\(calendar.maxMembers)"
+    }
+
+    private func applyPendingCalendarActionMessageIfNeeded() {
+        guard let pendingMessage = state.pendingCalendarActionMessage else { return }
+        calendarActionMessage = pendingMessage
+        calendarActionMessageIsError = state.pendingCalendarActionMessageIsError
+        state.consumePendingCalendarActionMessage()
     }
 }
 
@@ -783,7 +796,7 @@ struct CalendarDetailSettingsView: View {
         }
 
         Section {
-            LabeledContent("Share code", value: calendar.shareCode)
+            LabeledContent("Share code", value: CalendarInviteLink.formattedShareCode(calendar.shareCode))
 
             ShareLink(item: inviteShareText(for: calendar)) {
                 Label("Share invite code", systemImage: "square.and.arrow.up")
@@ -881,11 +894,14 @@ struct CalendarDetailSettingsView: View {
     }
 
     private func inviteShareText(for calendar: PlannerCalendar) -> String {
-        """
+        let formattedCode = CalendarInviteLink.formattedShareCode(calendar.shareCode)
+        let inviteURL = CalendarInviteLink.url(forShareCode: calendar.shareCode)?.absoluteString ?? ""
+        return """
         Join my calendar "\(calendar.name)" on The Weekend.
-        Share code: \(calendar.shareCode)
+        Open invite: \(inviteURL)
+        Share code: \(formattedCode)
 
-        In the app, go to Settings -> Join shared calendar and paste this code.
+        If the invite link does not open the app, go to Settings -> Calendars -> Join with code and paste the code.
         """
     }
 }
@@ -959,27 +975,41 @@ struct JoinCalendarSheetView: View {
 
     @State private var joinCalendarCode = ""
     @State private var isSubmitting = false
+    @State private var joinFeedbackMessage: String?
+    @State private var joinFeedbackIsError = false
 
     var body: some View {
         NavigationStack {
             List {
+                if let joinFeedbackMessage {
+                    Section {
+                        CalendarActionMessageView(
+                            message: joinFeedbackMessage,
+                            isError: joinFeedbackIsError
+                        )
+                    }
+                }
+
                 Section("Share code") {
-                    TextField("Join with share code", text: $joinCalendarCode)
-                        .textInputAutocapitalization(.characters)
+                    TextField("Paste invite link or share code", text: $joinCalendarCode)
+                        .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .onChange(of: joinCalendarCode) { _, value in
-                            let normalized = value.uppercased()
-                            if normalized != value {
-                                joinCalendarCode = normalized
-                            }
-                        }
+                    if let normalizedJoinCode {
+                        Text("Using code \(CalendarInviteLink.formattedShareCode(normalizedJoinCode))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if !joinCalendarCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Enter a valid 8-character share code or a full invite link.")
+                            .font(.caption)
+                            .foregroundStyle(Color.protectedRed)
+                    }
                 }
 
                 Section {
                     Button("Join shared calendar") {
                         Task { await joinCalendar() }
                     }
-                    .disabled(trimmedJoinCode.isEmpty || isSubmitting || state.isLoading)
+                    .disabled(normalizedJoinCode == nil || isSubmitting || state.isLoading)
                     .accessibilityIdentifier("settings.calendars.join")
                 }
             }
@@ -996,23 +1026,24 @@ struct JoinCalendarSheetView: View {
         }
     }
 
-    private var trimmedJoinCode: String {
-        joinCalendarCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    private var normalizedJoinCode: String? {
+        CalendarInviteLink.normalizedShareCode(from: joinCalendarCode)
     }
 
     private func joinCalendar() async {
-        guard !trimmedJoinCode.isEmpty else { return }
+        guard let normalizedJoinCode else { return }
         isSubmitting = true
         defer { isSubmitting = false }
+        joinFeedbackMessage = nil
 
-        let success = await state.joinCalendar(shareCode: trimmedJoinCode)
+        let success = await state.joinCalendar(shareCode: normalizedJoinCode)
         if success {
             calendarActionMessage = "Joined shared calendar."
             calendarActionMessageIsError = false
             dismiss()
         } else {
-            calendarActionMessage = state.authMessage ?? "Could not join calendar."
-            calendarActionMessageIsError = true
+            joinFeedbackMessage = state.authMessage ?? "Could not join calendar."
+            joinFeedbackIsError = true
         }
     }
 }
